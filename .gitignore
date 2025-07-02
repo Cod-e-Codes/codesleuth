@@ -58,4 +58,8 @@ test-cobol/cobol-programming-course-master/
 
 # Ignore data files
 test-cobol/data
-test-cobol/xdata 
+test-cobol/xdata
+
+# Allow go.mod and go.sum in the project root
+!go.mod
+!go.sum 
