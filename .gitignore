@@ -1,0 +1,61 @@
+# Rust build artifacts
+/target/
+**/target/
+Cargo.lock
+
+# Go build artifacts
+*.exe
+*.out
+*.test
+*.log
+*.mod
+*.sum
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# VSCode and editor files
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Ignore all COBOL and JCL files in test-cobol/
+test-cobol/**/*.cobol
+test-cobol/**/*.cbl
+test-cobol/**/*.jcl
+test-cobol/**/*.CBL
+test-cobol/**/*.JCL
+
+# Optionally keep a couple of demo files (uncomment if you want to keep these)
+#!test-cobol/HELLO.cobol
+#!test-cobol/HELLO.jcl
+
+# Ignore all courseware and large datasets
+test-cobol/cobol-programming-course-master/
+
+# Ignore binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.pdb
+*.obj
+*.o
+*.a
+*.lib
+*.exp
+*.bin
+*.class
+*.jar
+*.war
+*.ear
+
+# Ignore data files
+test-cobol/data
+test-cobol/xdata 

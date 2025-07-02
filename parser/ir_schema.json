@@ -1,0 +1,82 @@
+{
+  "program_name": "string",
+  "source_file": "string",
+  "identification_division": {
+    "author": "string",
+    "date_written": "string",
+    "comments": ["string"]
+  },
+  "environment_division": {
+    "input_output_section": {
+      "files": [
+        {
+          "name": "string",
+          "type": "input|output|i-o|extend",
+          "description": "string"
+        }
+      ]
+    }
+  },
+  "data_division": {
+    "working_storage": [
+      {
+        "name": "string",
+        "type": "string",
+        "level": "integer",
+        "picture": "string",
+        "value": "string|number|null",
+        "children": []
+      }
+    ],
+    "file_section": [
+      {
+        "name": "string",
+        "fields": [
+          {
+            "name": "string",
+            "type": "string",
+            "picture": "string",
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  "paragraphs": [
+    {
+      "name": "string",
+      "section": "string",
+      "kind": "paragraph",
+      "line": 123,
+      "source_location": "myfile.cbl:123",
+      "statements": [
+        {
+          "type": "PERFORM|CALL|MOVE|IF|DISPLAY|...",
+          "operands": ["string"],
+          "raw": "string",
+          "line": 123,
+          "source_location": "myfile.cbl:123"
+        }
+      ]
+    }
+  ],
+  "procedure_division": {
+    "sections": [
+      {
+        "name": "string",
+        "paragraphs": ["string"]
+      }
+    ]
+  },
+  "call_graph": [
+    {
+      "from": "string",
+      "to": "string",
+      "type": "CALL|PERFORM|GOTO|PERFORM VARYING",
+      "kind": "edge",
+      "line": 123,
+      "section": "string",
+      "source_location": "myfile.cbl:123"
+    }
+  ]
+} 
