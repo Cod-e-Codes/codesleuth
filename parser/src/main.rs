@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use chrono::Utc;
 use regex::Regex;
 use std::collections::HashMap;
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -17,6 +19,26 @@ struct Args {
 }
 
 // static RE_IDENT_DIV: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^\s*IDENTIFICATION DIVISION\s*\.?$").unwrap());
+
+static COBOL_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+    [
+        "MOVE", "PERFORM", "READ", "WRITE", "DISPLAY", "IF", "ELSE", "END-IF", "UNTIL", "AT", "END", "STOP",
+        "CALL", "EXEC", "SQL", "OPEN", "CLOSE", "FETCH", "COMPUTE", "SET", "IS", "NOT", "EQUAL", "THEN",
+        "USING", "FROM", "BY", "TO", "VARYING", "AND", "OR", ">", "<", "=", ".", "(", ")", "FUNCTION",
+        "INTO", "AFTER", "ADVANCING", "END-EXEC", "RETURN", "RUN", "INPUT", "OUTPUT", "I-O", "EXTEND",
+        "CURRENT-DATE", "GOBACK"
+    ].iter().cloned().collect()
+});
+
+fn is_literal(name: &str) -> bool {
+    let n = name.trim();
+    if n.starts_with('"') && n.ends_with('"') { return true; }
+    if n.starts_with('\'') && n.ends_with('\'') { return true; }
+    if n.parse::<f64>().is_ok() { return true; }
+    let upper = n.to_uppercase();
+    matches!(upper.as_str(), "SPACES" | "ZERO" | "ZEROS" | "HIGH-VALUE" | "LOW-VALUE" | "QUOTE" | "QUOTES" | "NULL") ||
+    n.starts_with('"') || n.ends_with('"') || n.starts_with('\'') || n.ends_with('\'')
+}
 
 #[derive(Serialize)]
 struct IR {
@@ -53,6 +75,7 @@ struct IOFile {
     name: String,
     r#type: String,
     description: String,
+    record_name: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -135,23 +158,21 @@ struct ControlFlowEdge {
 fn infer_type_from_pic(pic: &str) -> String {
     let pic = pic.to_uppercase();
     if pic.contains("COMP-3") || pic.contains("PACKED") {
-        return "packed decimal (COMP-3)".to_string();
+        return "packed-decimal (COMP-3)".to_string();
     }
     if pic.starts_with('X') || pic.contains("X(") {
-        "string".to_string()
-    } else if pic.contains('9') {
-        if pic.contains('V') || pic.contains('.') {
-            "float".to_string()
-        } else if pic.contains('S') {
-            "signed numeric".to_string()
-        } else {
-            "numeric".to_string()
-        }
-    } else if pic.contains("COMP") {
-        "binary".to_string()
-    } else {
-        "unknown".to_string()
+        return "string".to_string();
     }
+    if pic.contains('9') {
+        if pic.contains('V') || pic.contains('.') {
+            return "float".to_string();
+        }
+        return "numeric".to_string();
+    }
+    if pic.contains("COMP") {
+        return "binary".to_string();
+    }
+    "unknown".to_string()
 }
 
 fn normalize_name(s: &str) -> String {
@@ -198,7 +219,7 @@ fn parse_identification_division(source: &str) -> (String, String, String, Vec<S
 
 fn extract_section_lines<'a>(source: &'a str, section: &str) -> Vec<&'a str> {
     let re_start = Regex::new(&format!(r"(?i)^\s*{}\s*\.?$", section)).unwrap();
-    let re_end = Regex::new(r"(?i)^\s*\w+ DIVISION\s*\.?$").unwrap();
+    let re_end = Regex::new(r"(?i)^\s*(WORKING-STORAGE SECTION|FILE SECTION|LINKAGE SECTION|PROCEDURE DIVISION|[A-Z-]+ DIVISION)\s*\.?$").unwrap();
     let mut lines = Vec::new();
     let mut in_section = false;
     for line in source.lines() {
@@ -207,7 +228,7 @@ fn extract_section_lines<'a>(source: &'a str, section: &str) -> Vec<&'a str> {
             continue;
         }
         if in_section {
-            if re_end.is_match(line) {
+            if re_end.is_match(line) && !re_start.is_match(line) {
                 break;
             }
             lines.push(line);
@@ -273,35 +294,43 @@ fn parse_data_items(section_lines: &[&str], section_name: Option<&str>) -> Vec<D
     result
 }
 
-fn extract_variable_usage(statements: &[Statement]) -> Vec<VariableUsage> {
-    use std::collections::HashMap;
+fn extract_variable_usage(statements: &[Statement], para_name_map: &HashMap<String, String>) -> Vec<VariableUsage> {
     let mut usage: HashMap<String, (bool, bool)> = HashMap::new();
     for stmt in statements {
         let stype = stmt.r#type.to_uppercase();
         let ops = &stmt.operands;
-        // Heuristic: first operand is written for MOVE, rest are read; for ADD/SUBTRACT, first is read, rest are written; for others, all are read
+        let filtered_ops: Vec<_> = ops.iter()
+            .filter(|op| {
+                let opu = normalize_name(op);
+                !COBOL_KEYWORDS.contains(opu.as_str()) && !is_literal(op) && !para_name_map.contains_key(&opu)
+            })
+            .cloned()
+            .collect();
         match stype.as_str() {
             "MOVE" => {
-                if ops.len() >= 2 {
-                    usage.entry(ops[0].clone()).or_insert((true, false)); // read
-                    usage.entry(ops[1].clone()).or_insert((false, true)); // written
-                }
-            }
-            "ADD" | "SUBTRACT" => {
-                if ops.len() >= 2 {
-                    usage.entry(ops[0].clone()).or_insert((true, false)); // read
-                    for op in &ops[1..] {
-                        usage.entry(op.clone()).or_insert((false, true)); // written
+                if filtered_ops.len() >= 2 {
+                    usage.entry(filtered_ops[0].clone()).or_insert((true, false));
+                    for op in &filtered_ops[1..] {
+                        usage.entry(op.clone()).or_insert((false, true));
                     }
                 }
             }
+            "ADD" | "SUBTRACT" => {
+                if filtered_ops.len() >= 2 {
+                    for op in &filtered_ops[..filtered_ops.len() - 1] {
+                        usage.entry(op.clone()).or_insert((true, false));
+                    }
+                    let last_op = &filtered_ops[filtered_ops.len() - 1];
+                    usage.entry(last_op.clone()).or_insert((true, true));
+                }
+            }
             "READ" | "WRITE" | "OPEN" | "CLOSE" => {
-                for op in ops {
+                for op in &filtered_ops {
                     usage.entry(op.clone()).or_insert((true, false));
                 }
             }
             _ => {
-                for op in ops {
+                for op in &filtered_ops {
                     usage.entry(op.clone()).or_insert((true, false));
                 }
             }
@@ -314,20 +343,13 @@ fn parse_procedure_division_and_call_graph(source: &str) -> (ProcedureDivision, 
     let re_proc_div = Regex::new(r"(?i)^\s*PROCEDURE DIVISION\s*\.?$").unwrap();
     let re_division = Regex::new(r"(?i)^\s*\w+ DIVISION\s*\.?$").unwrap();
     let re_section = Regex::new(r"^\s*([A-Z0-9-]+) SECTION\s*\.\s*$").unwrap();
-    let re_paragraph = Regex::new(r"^\s*([A-Z0-9-]+)\.").unwrap();
+    let re_paragraph = Regex::new(r"^\s*([A-Z0-9-]+)\.\s*$").unwrap();
+    let skip_paragraphs = ["END-IF", "END-READ", "GOBACK"];
     let mut in_proc = false;
-    let mut sections: Vec<ProcedureSection> = Vec::new();
-    let mut current_section: Option<ProcedureSection> = None;
-    let mut current_paragraph: Option<Paragraph> = None;
-    let mut current_paragraph_name = String::new();
-    let mut call_graph = Vec::new();
     let mut all_paragraphs: Vec<String> = Vec::new();
     let mut para_name_map: HashMap<String, String> = HashMap::new();
-    // Track paragraphs for default section if no explicit section
-    let mut default_section_paragraphs: Vec<Paragraph> = Vec::new();
-    let mut control_flow_graph = Vec::new();
-    let mut all_paragraphs_flat: Vec<Paragraph> = Vec::new();
-    for line in source.lines() {
+    // First pass: collect all paragraph names
+    for (_i, line) in source.lines().enumerate() {
         let line = line.trim_end();
         if !in_proc && re_proc_div.is_match(line) {
             in_proc = true;
@@ -335,38 +357,70 @@ fn parse_procedure_division_and_call_graph(source: &str) -> (ProcedureDivision, 
         }
         if in_proc {
             if re_division.is_match(line) && !re_proc_div.is_match(line) {
-                break; // End of procedure division
+                break;
+            }
+            if let Some(para_caps) = re_paragraph.captures(line) {
+                let name = para_caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                if skip_paragraphs.contains(&name.as_str()) { continue; }
+                let norm_name = normalize_name(&name);
+                all_paragraphs.push(norm_name.clone());
+                para_name_map.insert(norm_name, name.clone());
+            }
+        }
+    }
+    // Second pass: parse statements and build graphs
+    in_proc = false;
+    let mut sections: Vec<ProcedureSection> = Vec::new();
+    let mut current_section: Option<ProcedureSection> = None;
+    let mut current_paragraph: Option<Paragraph> = None;
+    let mut current_paragraph_name = String::new();
+    let mut call_graph = Vec::new();
+    let mut default_section_paragraphs: Vec<Paragraph> = Vec::new();
+    let mut control_flow_graph = Vec::new();
+    let mut all_paragraphs_flat: Vec<Paragraph> = Vec::new();
+    for (i, line) in source.lines().enumerate() {
+        let line = line.trim_end();
+        if !in_proc && re_proc_div.is_match(line) {
+            in_proc = true;
+            continue;
+        }
+        if in_proc {
+            if re_division.is_match(line) && !re_proc_div.is_match(line) {
+                break;
             }
             if let Some(sec_caps) = re_section.captures(line) {
-                // New section
                 if let Some(mut sec) = current_section.take() {
-                    if let Some(p) = current_paragraph.take() {
-                        sec.paragraphs.push(p);
+                    if let Some(mut p) = current_paragraph.take() {
+                        p.variable_usage = extract_variable_usage(&p.statements, &para_name_map);
+                        sec.paragraphs.push(p.clone());
+                        all_paragraphs_flat.push(p);
                     }
                     sections.push(sec);
                 }
-                current_section = Some(ProcedureSection { name: sec_caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default(), paragraphs: Vec::new() });
+                current_section = Some(ProcedureSection {
+                    name: sec_caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default(),
+                    paragraphs: Vec::new(),
+                });
                 current_paragraph = None;
                 current_paragraph_name.clear();
             } else if let Some(para_caps) = re_paragraph.captures(line) {
-                // New paragraph
-                if let Some(ref mut sec) = current_section {
-                    if let Some(p) = current_paragraph.take() {
-                        sec.paragraphs.push(p);
-                    }
-                } else if let Some(p) = current_paragraph.take() {
-                    default_section_paragraphs.push(p);
-                }
                 let name = para_caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
-                let norm_name = normalize_name(&name);
-                all_paragraphs.push(norm_name.clone());
-                para_name_map.insert(norm_name.clone(), name.clone());
+                if skip_paragraphs.contains(&name.as_str()) { continue; }
+                if let Some(ref mut para) = current_paragraph {
+                    para.variable_usage = extract_variable_usage(&para.statements, &para_name_map);
+                    if let Some(ref mut sec) = current_section {
+                        sec.paragraphs.push(para.clone());
+                    } else {
+                        default_section_paragraphs.push(para.clone());
+                    }
+                    all_paragraphs_flat.push(para.clone());
+                }
                 current_paragraph_name = name.clone();
                 current_paragraph = Some(Paragraph {
                     name,
-                    section: None,
+                    section: current_section.as_ref().map(|s| s.name.clone()),
                     kind: "paragraph".to_string(),
-                    line: None,
+                    line: Some(i + 1),
                     source_location: None,
                     statements: Vec::new(),
                     variable_usage: Vec::new(),
@@ -376,216 +430,142 @@ fn parse_procedure_division_and_call_graph(source: &str) -> (ProcedureDivision, 
                 if !trimmed.is_empty() && !trimmed.starts_with('*') {
                     let mut parts = trimmed.split_whitespace();
                     let stype = parts.next().unwrap_or("").to_uppercase();
-                    let operands: Vec<String> = parts.clone().map(|s| s.to_string()).collect();
+                    let operands: Vec<String> = parts.map(|s| s.to_string()).collect();
+                    let stmt = Statement {
+                        r#type: stype.clone(),
+                        operands: operands.clone(),
+                        raw: trimmed.to_string(),
+                        line: Some(i + 1),
+                        source_location: None,
+                    };
+                    para.statements.push(stmt.clone());
                     // Call graph extraction
                     if stype == "PERFORM" && !operands.is_empty() {
-                        // Ignore PERFORM TIMES
-                        if operands.iter().any(|s| s.to_uppercase() == "TIMES") {
-                            // Do not add to call graph
-                        } else if operands.iter().any(|s| s.to_uppercase() == "VARYING") {
-                            // PERFORM VARYING ...
-                            let from_norm = current_paragraph_name.trim_end_matches('.').to_uppercase();
-                            let from_name = para_name_map.get(&from_norm).unwrap_or(&from_norm);
-                            if let Some(target) = operands.last() {
-                                let target_norm = normalize_name(target);
-                                if let Some(to_name) = para_name_map.get(&target_norm) {
-                                    eprintln!("[CALL-GRAPH] from={} to={} type=PERFORM VARYING", from_name, to_name);
-                                    call_graph.push(CallGraphEntry {
-                                        from: from_name.clone(),
-                                        to: to_name.clone(),
-                                        r#type: "PERFORM VARYING".to_string(),
-                                        kind: "edge".to_string(),
-                                        line: None,
-                                        section: None,
-                                        source_location: None,
-                                    });
-                                } else {
-                                    eprintln!("[CALL-GRAPH] Skipping PERFORM VARYING edge: {} -> {} (target not found)", from_name, target_norm);
-                                }
-                            }
-                        } else if operands.len() >= 3 && operands[1].to_uppercase() == "THRU" {
-                            // PERFORM <start> THRU <end>
-                            let start = operands[0].trim_end_matches('.').to_uppercase();
-                            let end = operands[2].trim_end_matches('.').to_uppercase();
-                            let from_norm = current_paragraph_name.trim_end_matches('.').to_uppercase();
-                            let from_name = para_name_map.get(&from_norm).unwrap_or(&from_norm);
-                            let mut in_range = false;
-                            for para_norm in &all_paragraphs {
-                                if para_norm == &start {
-                                    in_range = true;
-                                }
-                                if in_range {
-                                    if let Some(to_name) = para_name_map.get(para_norm) {
-                                        eprintln!("[CALL-GRAPH] from={} to={} type=PERFORM", from_name, to_name);
-                                        call_graph.push(CallGraphEntry {
-                                            from: from_name.clone(),
-                                            to: to_name.clone(),
-                                            r#type: "PERFORM".to_string(),
-                                            kind: "edge".to_string(),
-                                            line: None,
-                                            section: None,
-                                            source_location: None,
-                                        });
-                                    } else {
-                                        eprintln!("[CALL-GRAPH] Skipping PERFORM THRU edge: {} -> {} (target not found)", from_name, para_norm);
-                                    }
-                                }
-                                if para_norm == &end {
-                                    break;
-                                }
-                            }
+                        let target = if operands.iter().any(|s| s.to_uppercase() == "UNTIL") {
+                            normalize_name(&operands[0])
+                        } else if operands.iter().any(|s| s.to_uppercase() == "THRU") {
+                            normalize_name(&operands[0])
                         } else {
-                            // Handle direct PERFORM <para> and PERFORM ... UNTIL ...
-                            let target = operands[0].trim_end_matches('.').to_uppercase();
-                            let from_norm = current_paragraph_name.trim_end_matches('.').to_uppercase();
-                            let from_name = para_name_map.get(&from_norm).unwrap_or(&from_norm);
-                            if !target.is_empty() && para_name_map.contains_key(&target) {
-                                if let Some(to_name) = para_name_map.get(&target) {
-                                    eprintln!("[CALL-GRAPH] from={} to={} type=PERFORM", from_name, to_name);
-                                    call_graph.push(CallGraphEntry {
-                                        from: from_name.clone(),
-                                        to: to_name.clone(),
-                                        r#type: "PERFORM".to_string(),
-                                        kind: "edge".to_string(),
-                                        line: None,
-                                        section: None,
-                                        source_location: None,
-                                    });
+                            normalize_name(&operands[0])
+                        };
+                        if let Some(to_name) = para_name_map.get(&target) {
+                            call_graph.push(CallGraphEntry {
+                                from: current_paragraph_name.clone(),
+                                to: to_name.clone(),
+                                r#type: if operands.iter().any(|s| s.to_uppercase() == "UNTIL") {
+                                    "PERFORM VARYING".to_string()
                                 } else {
-                                    eprintln!("[CALL-GRAPH] Skipping PERFORM edge: {} -> {} (target not found)", from_name, target);
-                                }
-                            } else {
-                                eprintln!("[CALL-GRAPH] Skipping PERFORM edge: {} -> {} (target not found)", from_name, target);
-                            }
+                                    "PERFORM".to_string()
+                                },
+                                kind: "edge".to_string(),
+                                line: Some(i + 1),
+                                section: current_section.as_ref().map(|s| s.name.clone()),
+                                source_location: None,
+                            });
                         }
                     } else if (stype == "GO" && operands.get(0).map(|s| s.to_uppercase()) == Some("TO".to_string())) || stype == "GOTO" {
-                        // GO TO <para> or GOTO <para>
-                        let from_norm = current_paragraph_name.trim_end_matches('.').to_uppercase();
-                        let from_name = para_name_map.get(&from_norm).unwrap_or(&from_norm);
                         let target = if stype == "GO" { operands.get(1) } else { operands.get(0) };
                         if let Some(target) = target {
                             let target_norm = normalize_name(target);
                             if let Some(to_name) = para_name_map.get(&target_norm) {
-                                eprintln!("[CALL-GRAPH] from={} to={} type=GOTO", from_name, to_name);
                                 call_graph.push(CallGraphEntry {
-                                    from: from_name.clone(),
+                                    from: current_paragraph_name.clone(),
                                     to: to_name.clone(),
                                     r#type: "GOTO".to_string(),
                                     kind: "edge".to_string(),
-                                    line: None,
-                                    section: None,
+                                    line: Some(i + 1),
+                                    section: current_section.as_ref().map(|s| s.name.clone()),
                                     source_location: None,
                                 });
-                            } else {
-                                eprintln!("[CALL-GRAPH] Skipping GOTO edge: {} -> {} (target not found)", from_name, target_norm);
                             }
                         }
                     } else if stype == "CALL" && !operands.is_empty() {
-                        // Only handle CALL '<prog>'
                         let mut target = operands[0].trim_end_matches('.').to_string();
                         target = target.trim_matches('"').trim_matches('\'').to_string();
-                        let from_norm = current_paragraph_name.trim_end_matches('.').to_uppercase();
-                        let from_name = para_name_map.get(&from_norm).unwrap_or(&from_norm);
                         let target_norm = normalize_name(&target);
                         if !target_norm.is_empty() {
-                            eprintln!("[CALL-GRAPH] from={} to={} type=CALL", from_name, target_norm);
                             call_graph.push(CallGraphEntry {
-                                from: from_name.clone(),
-                                to: target_norm.clone(),
+                                from: current_paragraph_name.clone(),
+                                to: target_norm,
                                 r#type: "CALL".to_string(),
                                 kind: "edge".to_string(),
-                                line: None,
-                                section: None,
+                                line: Some(i + 1),
+                                section: current_section.as_ref().map(|s| s.name.clone()),
                                 source_location: None,
                             });
-                        } else {
-                            eprintln!("[CALL-GRAPH] Skipping CALL edge: {} -> {} (target not found)", from_name, target_norm);
                         }
                     }
-                    // Always push the statement first, then update variable usage
-                    para.statements.push(Statement {
-                        r#type: stype,
-                        operands,
-                        raw: trimmed.to_string(),
-                        line: None,
-                        source_location: None,
-                    });
-                    let variable_usage = extract_variable_usage(&para.statements);
-                    para.variable_usage = variable_usage;
                 }
             }
         }
-        // When a paragraph is completed (before pushing to section/default):
-        if let Some(ref para) = current_paragraph {
-            let para_flat = Paragraph {
-                name: para.name.clone(),
-                section: current_section.as_ref().map(|s| s.name.clone()),
-                kind: "paragraph".to_string(),
-                line: None, // Optionally parse line number if available
-                source_location: None, // Optionally parse source location if available
-                statements: para.statements.clone(),
-                variable_usage: para.variable_usage.clone(),
-            };
-            all_paragraphs_flat.push(para_flat);
-        }
     }
-    // Push last paragraph to section or default
-    if let Some(ref mut sec) = current_section {
-        if let Some(p) = current_paragraph.take() {
-            sec.paragraphs.push(p);
+    // Finalize last paragraph and section
+    if let Some(ref mut para) = current_paragraph {
+        para.variable_usage = extract_variable_usage(&para.statements, &para_name_map);
+        if let Some(ref mut sec) = current_section {
+            sec.paragraphs.push(para.clone());
+        } else {
+            default_section_paragraphs.push(para.clone());
         }
-        sections.push(sec.clone());
-    } else if let Some(p) = current_paragraph.take() {
-        default_section_paragraphs.push(p);
+        all_paragraphs_flat.push(para.clone());
     }
-    // If there were any paragraphs not in a section, add a default section
+    if let Some(sec) = current_section {
+        sections.push(sec);
+    }
     if !default_section_paragraphs.is_empty() {
-        sections.insert(0, ProcedureSection { name: "".to_string(), paragraphs: default_section_paragraphs });
+        sections.insert(0, ProcedureSection {
+            name: "".to_string(),
+            paragraphs: default_section_paragraphs,
+        });
     }
-    eprintln!("Paragraph names found:");
-    for p in &all_paragraphs {
-        eprintln!(" - {}", p);
-    }
-    // After all paragraphs are parsed:
-    // For each paragraph, add NEXT edges between statements, and PERFORM/GOTO edges to their targets
+    // Generate control flow graph
     for sec in &sections {
         for para in &sec.paragraphs {
             let mut prev_stmt: Option<&Statement> = None;
             for stmt in &para.statements {
-                if prev_stmt.is_some() {
-                    let from_label = format!("{}:{}", para.name, prev_stmt.as_ref().map(|s| s.raw.clone()).unwrap_or_default());
-                    let to_label = format!("{}:{}", para.name, stmt.raw.clone());
+                if let Some(prev) = prev_stmt {
+                    let from_label = format!("{}:{}", para.name, prev.raw);
+                    let to_label = format!("{}:{}", para.name, stmt.raw);
                     control_flow_graph.push(ControlFlowEdge {
                         from: from_label,
                         to: to_label,
                         r#type: "NEXT".to_string(),
                     });
                 }
-                // Add PERFORM/GOTO edges
                 let stype = stmt.r#type.to_uppercase();
                 if stype == "PERFORM" && !stmt.operands.is_empty() {
-                    let target = normalize_name(&stmt.operands[0]);
-                    control_flow_graph.push(ControlFlowEdge {
-                        from: format!("{}:{}", para.name, stmt.raw.clone()),
-                        to: format!("{}:{}", target, stmt.raw.clone()),
-                        r#type: "PERFORM".to_string(),
-                    });
+                    let target = if stmt.operands.iter().any(|s| s.to_uppercase() == "UNTIL") {
+                        normalize_name(&stmt.operands[0])
+                    } else {
+                        normalize_name(&stmt.operands[0])
+                    };
+                    if let Some(to_name) = para_name_map.get(&target) {
+                        control_flow_graph.push(ControlFlowEdge {
+                            from: format!("{}:{}", para.name, stmt.raw),
+                            to: format!("{}:{}", to_name, stmt.raw),
+                            r#type: if stmt.operands.iter().any(|s| s.to_uppercase() == "UNTIL") {
+                                "PERFORM VARYING".to_string()
+                            } else {
+                                "PERFORM".to_string()
+                            },
+                        });
+                    }
                 } else if stype == "GOTO" && !stmt.operands.is_empty() {
                     let target = normalize_name(&stmt.operands[0]);
-                    control_flow_graph.push(ControlFlowEdge {
-                        from: format!("{}:{}", para.name, stmt.raw.clone()),
-                        to: format!("{}:{}", target, stmt.raw.clone()),
-                        r#type: "GOTO".to_string(),
-                    });
+                    if let Some(to_name) = para_name_map.get(&target) {
+                        control_flow_graph.push(ControlFlowEdge {
+                            from: format!("{}:{}", para.name, stmt.raw),
+                            to: format!("{}:{}", to_name, stmt.raw),
+                            r#type: "GOTO".to_string(),
+                        });
+                    }
                 }
                 prev_stmt = Some(stmt);
             }
         }
     }
     (
-        ProcedureDivision {
-            sections,
-        },
+        ProcedureDivision { sections },
         call_graph,
         control_flow_graph,
         all_paragraphs_flat,
@@ -613,8 +593,16 @@ fn parse_input_output_section(source: &str, file_modes: &HashMap<String, String>
     let re_env_div = Regex::new(r"(?i)^\s*ENVIRONMENT DIVISION\s*\.?$").unwrap();
     let re_io_sec = Regex::new(r"(?i)^\s*INPUT-OUTPUT SECTION\s*\.?$").unwrap();
     let re_file_control = Regex::new(r"(?i)^\s*FILE-CONTROL\s*\.?$").unwrap();
-    let re_select = Regex::new(r"(?i)^\s*SELECT\s+([A-Z0-9-]+)\s+ASSIGN\s+TO\s+('?\w+'?)\s*\.").unwrap();
-    let re_select_simple = Regex::new(r"(?i)^\s*SELECT\s+([A-Z0-9-]+)\s+ASSIGN\s+TO\s+([A-Z0-9-]+)\s*\.").unwrap();
+    let re_select = Regex::new(r"(?i)^\s*SELECT\s+([A-Z0-9-]+)\s+ASSIGN\s+TO\s+('?\w+'?)\s*\.\s*$").unwrap();
+    let re_fd = Regex::new(r"(?i)^\s*FD\s+([A-Z0-9-]+)\s*.*").unwrap();
+    let re_01_level = Regex::new(r"(?i)^\s*01\s+([A-Z0-9-]+)\s*.*").unwrap();
+    let mut select_to_fd: HashMap<String, String> = HashMap::new();
+    let mut last_select: Option<String> = None;
+    let file_section_lines = extract_section_lines(source, "FILE SECTION");
+    let file_section = parse_data_items(&file_section_lines, Some("FILE SECTION"));
+    let file_section_names: HashSet<String> = file_section.iter().map(|item| item.name.clone()).collect();
+    let mut expecting_01 = false;
+
     for line in source.lines() {
         let line = line.trim_end();
         if !in_env && re_env_div.is_match(line) {
@@ -625,36 +613,44 @@ fn parse_input_output_section(source: &str, file_modes: &HashMap<String, String>
             in_io = true;
             continue;
         }
-        if in_env && in_io && re_file_control.is_match(line) {
-            continue; // Just a marker
-        }
         if in_env && in_io {
             if re_env_div.is_match(line) && !re_io_sec.is_match(line) {
-                break; // End of environment division
+                break;
+            }
+            if re_file_control.is_match(line) {
+                continue;
             }
             if let Some(caps) = re_select.captures(line) {
                 let name = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                last_select = Some(name.clone());
+                expecting_01 = false;
                 let assigned = caps.get(2).map(|m| m.as_str().trim_matches('"').trim_matches('\'').to_string()).unwrap_or_default();
-                // Use file_modes if available
                 let r#type = file_modes.get(&name).cloned().unwrap_or_else(|| {
                     if name.contains("IN") { "input".to_string() } else if name.contains("OUT") { "output".to_string() } else { "unknown".to_string() }
                 });
                 files.push(IOFile {
-                    name,
+                    name: name.clone(),
                     r#type,
                     description: format!("Assigned to {}", assigned),
+                    record_name: None,
                 });
-            } else if let Some(caps) = re_select_simple.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
-                let assigned = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
-                let r#type = file_modes.get(&name).cloned().unwrap_or_else(|| {
-                    if name.contains("IN") { "input".to_string() } else if name.contains("OUT") { "output".to_string() } else { "unknown".to_string() }
-                });
-                files.push(IOFile {
-                    name,
-                    r#type,
-                    description: format!("Assigned to {}", assigned),
-                });
+            } else if let Some(_caps) = re_fd.captures(line) {
+                expecting_01 = true;
+            } else if expecting_01 {
+                if let Some(caps) = re_01_level.captures(line) {
+                    let record_name = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                    if let Some(sel) = &last_select {
+                        if file_section_names.contains(&record_name) {
+                            select_to_fd.insert(sel.clone(), record_name.clone());
+                            for file in files.iter_mut() {
+                                if file.name == *sel {
+                                    file.record_name = Some(record_name.clone());
+                                }
+                            }
+                        }
+                    }
+                    expecting_01 = false;
+                }
             }
         }
     }

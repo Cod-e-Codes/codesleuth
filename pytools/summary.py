@@ -43,7 +43,6 @@ def is_valid_identifier(name):
     return True
 
 def is_literal(name):
-    # Exclude quoted strings and COBOL literals
     n = name.strip()
     if n.startswith("'") and n.endswith("'"):
         return True
@@ -52,6 +51,10 @@ def is_literal(name):
     if n.upper() in COBOL_LITERALS:
         return True
     if re.match(r'^-?\d+(\.\d+)?$', n):
+        return True
+    if n.startswith("'") or n.endswith("'"):
+        return True
+    if n.startswith('"') or n.endswith('"'):
         return True
     return False
 
@@ -134,14 +137,12 @@ def print_data_items(items, indent=0, show_section=False):
             print_data_items(item['children'], indent + 1, show_section)
         i += 1
 
-def print_working_storage(ws_vars, file_section_names=None):
+def print_working_storage(ws_vars, _file_section_names=None):
     print("\n## Working-Storage Variables\n")
     if ws_vars:
         for item in ws_vars:
             name = item.get('name')
             if not name:
-                continue
-            if file_section_names and name in file_section_names:
                 continue
             print_data_items([item])
     else:
@@ -149,16 +150,11 @@ def print_working_storage(ws_vars, file_section_names=None):
     print("\n---\n")
 
 def print_file_section(file_sections):
-    # Only show file records (FD/01) in the File Section
-    def is_file_record(item):
-        # Heuristic: FD/01 level and has children
-        return item.get('level') == 1 and item.get('children')
-    filtered = [item for item in file_sections if is_file_record(item)]
-    if filtered:
-        print("\n## File Section\n")
-        print_data_items(filtered)
+    print("\n## File Section\n")
+    if file_sections:
+        print_data_items([item for item in file_sections if item.get('level') == 1])
     else:
-        print("\n_No File Section entries found._\n")
+        print("_No File Section entries found._")
     print("\n---\n")
 
 def print_procedure_division(paragraphs, verbose=False, all_paragraphs_out=None):
@@ -167,30 +163,27 @@ def print_procedure_division(paragraphs, verbose=False, all_paragraphs_out=None)
         return
     print("\n## Procedure Division\n")
     all_paragraphs = []
-    # Only keep the last instance of each paragraph (by name, section, line)
     para_map = {}
+    paragraph_names = {para.get('name', '').upper() for para in paragraphs if para.get('name')}
     for para in paragraphs:
         pname = para.get('name', '')
         section = para.get('section', '')
         line = para.get('line')
         key = (pname, section, line)
-        para_map[key] = para  # always overwrite, so last instance is kept
-    for (pname, section, line), para in para_map.items():
-        # Track all paragraph names and their section/line for orphan detection
+        para_map[key] = para
         if pname:
             all_paragraphs.append((pname, section, line))
+    for (pname, section, line), para in para_map.items():
         statements = para.get('statements', [])
         var_usage = para.get('variable_usage', [])
         filtered_vars = []
         for vu in var_usage:
-            name = vu.get('name', '')
+            name = vu.get('name', '').strip().rstrip('.')
             if not name:
                 continue
-            name = name.strip().rstrip('.')  # Normalize variable name
-            if not is_valid_identifier(name) or is_literal(name):
+            if not is_valid_identifier(name) or is_literal(name) or name.upper() in paragraph_names:
                 continue
             filtered_vars.append({**vu, 'name': name})
-        # Skip paragraphs with no name and no statements/variable usage
         if not pname or (not statements and not filtered_vars):
             continue
         if pname.endswith("-END") and not statements:
@@ -225,34 +218,28 @@ def print_procedure_division(paragraphs, verbose=False, all_paragraphs_out=None)
         all_paragraphs_out.extend(all_paragraphs)
     print("\n---\n")
 
-def print_unused_paragraphs(all_paragraphs, call_graph):
-    # Find all paragraphs that are not targets of any call/perform/goto
+def print_unused_paragraphs(all_paragraphs, call_graph, paragraphs):
     called = set()
     for edge in call_graph:
         if edge.get('type', '').upper() in {"PERFORM", "GOTO", "PERFORM VARYING"}:
             to = edge.get('to')
             if to:
-                called.add(to)
-    # all_paragraphs is now a list of (name, section, line)
+                called.add(to.upper())
+    # Mark entry point and sequential transitions
+    used = set()
+    if all_paragraphs:
+        used.add(all_paragraphs[0][0].upper())  # Entry point
+        # Infer sequential flow based on paragraph order
+        for i in range(len(paragraphs) - 1):
+            current_para = paragraphs[i].get('name', '').upper()
+            next_para = paragraphs[i + 1].get('name', '').upper()
+            if current_para and next_para:
+                called.add(next_para)
     unused_counter = {}
     for para in all_paragraphs:
-        # Support (name, section, line) if available, else fallback
-        if isinstance(para, tuple):
-            if len(para) == 3:
-                pname, section, line = para
-            elif len(para) == 2:
-                pname, section = para
-                line = None
-            else:
-                pname = para[0]
-                section = None
-                line = None
-        else:
-            pname = para
-            section = None
-            line = None
-        if pname not in called:
-            key = (pname, section, line)
+        pname = para[0] if isinstance(para, tuple) else para
+        if pname.upper() not in called and pname.upper() not in used:
+            key = tuple(para) if isinstance(para, tuple) else (para, None, None)
             unused_counter[key] = unused_counter.get(key, 0) + 1
     if unused_counter:
         print("\n## Unused Paragraphs\n")
@@ -262,6 +249,9 @@ def print_unused_paragraphs(all_paragraphs, call_graph):
             line_info = f" _(line {line})_" if line else ""
             count_info = f" _(x{count})_" if count > 1 else ""
             print(f"- **{pname}**{section_info}{line_info}{count_info}")
+    else:
+        print("\n## Unused Paragraphs\n")
+        print("_No unused paragraphs found._")
     print("\n---\n")
 
 def print_external_calls(call_graph):
@@ -285,13 +275,15 @@ def print_external_calls(call_graph):
 def sanitize_node_id(name):
     if not name:
         return "UNKNOWN"
-    short = name[:20]
-    h = hashlib.md5(name.encode()).hexdigest()[:6]
-    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", short)
-    sanitized = re.sub(r"_+", "_", sanitized)
+    parts = name.split(":", 1)
+    para_name = parts[0][:20]  # Allow longer paragraph names
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", para_name)
+    if len(parts) > 1:
+        stmt_part = parts[1][:20]  # Allow longer statements
+        sanitized += f"_{re.sub(r'[^a-zA-Z0-9_]', '_', stmt_part)[:20]}"
     if re.match(r"^\d", sanitized):
         sanitized = "_" + sanitized
-    return f"{sanitized}_{h}"
+    return sanitized
 
 def print_call_graph(call_graph, verbose=False):
     print("\n## Call Graph\n")
@@ -371,19 +363,11 @@ def print_io_files(io_files, file_section=None):
         print("\n## Environment Division - Input/Output Section\n")
         print("| File Name | Type | Description | Record Structure |")
         print("|-----------|------|-------------|------------------|")
-        # Try to match file name to FD/record in file_section
-        record_map = {}
-        if file_section:
-            for item in file_section:
-                # Normalize FD name for better matching
-                fd_name = item.get('name', '').upper().replace('-', '')
-                if item.get('children'):
-                    record_map[fd_name] = item['children'][0].get('name', '')
         for f in io_files:
             name = f.get('name', 'UNKNOWN')
             ftype = f.get('type', 'unknown')
             desc = f.get('description', '')
-            record = record_map.get(name.upper().replace('-', ''), '')
+            record = f.get('record_name', '')
             print(f"| {name} | {ftype} | {desc} | {record} |")
     else:
         print("\n_No Input/Output files found._")
@@ -419,10 +403,11 @@ def main():
     old_stdout = sys.stdout
     sys.stdout = out_file
     try:
-        file_section = ir.get('data_division', {}).get('file_section', [])
-        file_section_names = {item['name'] for item in file_section if 'name' in item and item['name'] and item['name'].upper() != 'FILLER'}
+        data_div = ir.get('data_division', {})
+        file_section = data_div.get('file_section', [])
+        working_storage = data_div.get('working_storage', [])
         print_program_info(ir)
-        print_working_storage(ir.get('data_division', {}).get('working_storage', []), file_section_names)
+        print_working_storage(working_storage)
         print_file_section(file_section)
         all_paragraphs = []
         print_procedure_division(ir.get('paragraphs', []), verbose=args.verbose, all_paragraphs_out=all_paragraphs)
@@ -430,7 +415,7 @@ def main():
         print_call_graph(call_graph, verbose=args.verbose)
         print_control_flow_graph(ir.get('control_flow_graph', []))
         print_io_files(ir.get('environment_division', {}).get('input_output_section', {}).get('files', []), file_section)
-        print_unused_paragraphs(all_paragraphs, call_graph)
+        print_unused_paragraphs(all_paragraphs, call_graph, ir.get('paragraphs', []))
         print_external_calls(call_graph)
     finally:
         sys.stdout = old_stdout
