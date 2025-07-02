@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Rust (Cargo)
+  - package-ecosystem: "cargo"
+    directory: "/parser"
+    schedule:
+      interval: "weekly"
+
+  # Go (Go modules)
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Python (pip)
+  - package-ecosystem: "pip"
+    directory: "/pytools"
+    schedule:
+      interval: "weekly" 
