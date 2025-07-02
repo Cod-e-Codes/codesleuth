@@ -3,9 +3,8 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-Contributor%20Covenant-blueviolet.svg)](CODE_OF_CONDUCT.md)
-[![Issues](https://img.shields.io/github/issues/Cod-e-Codes/codesleuth)](https://github.com/Cod-e-Codes/codesleuth/issues)
-[![Pull Requests](https://img.shields.io/github/issues-pr/Cod-e-Codes/codesleuth)](https://github.com/Cod-e-Codes/codesleuth/pulls)
-[![Last Commit](https://img.shields.io/github/last-commit/Cod-e-Codes/codesleuth)](https://github.com/Cod-e-Codes/codesleuth/commits/main)
+
+<!-- Note: Issue/PR/commit badges require a public repo and are omitted for privacy. -->
 
 ---
 
