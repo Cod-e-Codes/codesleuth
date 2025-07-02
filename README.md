@@ -1,8 +1,15 @@
 # CodeSleuth
 
-**CodeSleuth** is a modern, multi-language code intelligence CLI tool focused on COBOL analysis. It combines a fast Rust parser, a Go CLI, and a Python Markdown summarizer to provide actionable, human-friendly reports for legacy codebases.
-
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-Contributor%20Covenant-blueviolet.svg)](CODE_OF_CONDUCT.md)
+[![Issues](https://img.shields.io/github/issues/Cod-e-Codes/codesleuth.svg)](https://github.com/Cod-e-Codes/codesleuth/issues)
+[![Pull Requests](https://img.shields.io/github/issues-pr/Cod-e-Codes/codesleuth.svg)](https://github.com/Cod-e-Codes/codesleuth/pulls)
+[![Last Commit](https://img.shields.io/github/last-commit/Cod-e-Codes/codesleuth.svg)](https://github.com/Cod-e-Codes/codesleuth/commits/main)
+
+---
+
+**CodeSleuth** is a modern, multi-language code intelligence CLI tool focused on COBOL analysis. It combines a fast Rust parser, a Go CLI, and a Python Markdown summarizer to provide actionable, human-friendly reports for legacy codebases.
 
 ---
 
@@ -12,6 +19,8 @@
 - **Dead Code Detection:** Lists unused paragraphs and variables.
 - **Extensible Pipeline:** Modular Rust, Go, and Python components.
 - **Modern CLI:** Easy to use, with verbose/debug options.
+- **Security Policy:** See [SECURITY.md](SECURITY.md)
+- **Continuous Integration:** Automated tests and linting via GitHub Actions.
 
 ---
 
@@ -31,7 +40,7 @@ cd codesleuth
 
 Install Python dependencies:
 ```sh
-pip install -r requirements.txt  # (if you add one)
+pip install -r requirements.txt
 ```
 
 ### 3. Build the Rust Parser
@@ -65,6 +74,18 @@ cd ..
   ```sh
   ./cmd/codesleuth.exe analyze test-cobol/ > summary.md
   ```
+
+---
+
+## Security
+
+If you discover a security vulnerability, please see [SECURITY.md](SECURITY.md) for responsible disclosure guidelines.
+
+---
+
+## Continuous Integration
+
+This project uses GitHub Actions for automated testing and linting. See `.github/workflows/ci.yml` for details.
 
 ---
 
