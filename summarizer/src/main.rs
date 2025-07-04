@@ -56,7 +56,7 @@ struct IR {
     data_division: Option<DataDivision>,
     paragraphs: Option<Vec<Paragraph>>,
     call_graph: Option<Vec<CallEdge>>,
-    control_flow_graph: Option<Vec<CallEdge>>,
+    control_flow_graph: Option<Vec<ControlFlowEdge>>,
     procedure_division: Option<ProcedureDivision>,
 }
 
@@ -94,20 +94,20 @@ struct DataDivision {
 
 #[derive(Debug, Deserialize, Clone)]
 struct DataItem {
-    name: Option<String>,
+    name: Option<serde_json::Value>,
     #[serde(rename = "type")]
-    item_type: Option<String>,
+    item_type: Option<serde_json::Value>,
     level: Option<u32>,
-    picture: Option<String>,
+    picture: Option<serde_json::Value>,
     value: Option<serde_json::Value>,
     occurs: Option<u32>,
-    redefines: Option<String>,
+    redefines: Option<serde_json::Value>,
     comp3: Option<bool>,
-    section: Option<String>,
+    section: Option<serde_json::Value>,
     children: Option<Vec<DataItem>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Paragraph {
     name: Option<String>,
     section: Option<String>,
@@ -118,7 +118,7 @@ struct Paragraph {
     variable_usage: Option<Vec<VariableUsage>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Statement {
     #[serde(rename = "type")]
     statement_type: Option<String>,
@@ -148,6 +148,14 @@ struct CallEdge {
 }
 
 #[derive(Debug, Deserialize)]
+struct ControlFlowEdge {
+    from: Option<String>,
+    to: Option<String>,
+    #[serde(rename = "type")]
+    edge_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ProcedureDivision {
     sections: Option<Vec<ProcedureSection>>,
 }
@@ -155,7 +163,7 @@ struct ProcedureDivision {
 #[derive(Debug, Deserialize)]
 struct ProcedureSection {
     name: Option<String>,
-    paragraphs: Option<Vec<String>>,
+    paragraphs: Option<Vec<Paragraph>>,
 }
 
 fn is_valid_identifier(name: &str) -> bool {
@@ -195,19 +203,34 @@ fn is_literal(name: &str) -> bool {
     false
 }
 
+fn get_str(val: &Option<serde_json::Value>) -> &str {
+    if let Some(serde_json::Value::String(s)) = val {
+        s
+    } else {
+        ""
+    }
+}
+
+
+
 fn format_value(val: &Option<serde_json::Value>) -> String {
     if let Some(v) = val {
-        let v_str = v.to_string().trim_matches('"').to_uppercase();
-        if let Some(literal) = COBOL_LITERALS.get(v_str.as_str()) {
-            return literal.to_string();
+        match v {
+            serde_json::Value::String(s) => {
+                let v_str = s.trim_matches('"').to_uppercase();
+                if let Some(literal) = COBOL_LITERALS.get(v_str.as_str()) {
+                    return literal.to_string();
+                }
+                if v_str.starts_with('\'') && v_str.ends_with('\'') {
+                    return format!("\"{}\"", v_str.trim_matches('\''));
+                }
+                if v_str.starts_with('"') && v_str.ends_with('"') {
+                    return v_str.to_string();
+                }
+                return v_str;
+            }
+            _ => return v.to_string(),
         }
-        if v_str.starts_with('\'') && v_str.ends_with('\'') {
-            return format!("\"{}\"", v_str.trim_matches('\''));
-        }
-        if v_str.starts_with('"') && v_str.ends_with('"') {
-            return v_str.to_string();
-        }
-        return v_str;
     }
     String::new()
 }
@@ -238,10 +261,10 @@ fn print_program_info<W: Write>(out: &mut W, ir: &IR) -> io::Result<()> {
 fn print_data_items<W: Write>(out: &mut W, items: &[DataItem], indent: usize, show_section: bool) -> io::Result<()> {
     let mut i = 0;
     while i < items.len() {
-        if items[i].name.as_deref().unwrap_or("").to_uppercase() == "FILLER" {
+        if get_str(&items[i].name).to_uppercase() == "FILLER" {
             let mut count = 1;
             let mut j = i + 1;
-            while j < items.len() && items[j].name.as_deref().unwrap_or("").to_uppercase() == "FILLER" {
+            while j < items.len() && get_str(&items[j].name).to_uppercase() == "FILLER" {
                 count += 1;
                 j += 1;
             }
@@ -253,22 +276,19 @@ fn print_data_items<W: Write>(out: &mut W, items: &[DataItem], indent: usize, sh
             i += count;
             continue;
         }
-        
         let item = &items[i];
         let prefix = "  ".repeat(indent);
-        let name = item.name.as_deref().unwrap_or("");
+        let name = get_str(&item.name);
         let level = item.level.unwrap_or(0);
-        let pic = item.picture.as_deref().unwrap_or("");
-        let typ = item.item_type.as_deref().unwrap_or("");
+        let pic = get_str(&item.picture);
+        let typ = get_str(&item.item_type);
         let occurs = item.occurs;
-        let redefines = item.redefines.as_deref();
+        let redefines = get_str(&item.redefines);
         let value = &item.value;
         let comp3 = item.comp3.unwrap_or(false);
-        let section = item.section.as_deref();
-        
+        let section = get_str(&item.section);
         let array_str = if let Some(occ) = occurs { format!(" [OCCURS {}]", occ) } else { String::new() };
-        let redef_str = if let Some(red) = redefines { format!(" [REDEFINES {}]", red) } else { String::new() };
-        
+        let redef_str = if !redefines.is_empty() { format!(" [REDEFINES {}]", redefines) } else { String::new() };
         let mut meta = Vec::new();
         if !pic.is_empty() {
             meta.push(format!("PIC {}", pic));
@@ -287,16 +307,13 @@ fn print_data_items<W: Write>(out: &mut W, items: &[DataItem], indent: usize, sh
             }
         }
         if show_section {
-            if let Some(sec) = section {
-                meta.push(format!("SECTION {}", sec));
+            if !section.is_empty() {
+                meta.push(format!("SECTION {}", section));
             }
         }
-        
         let meta_str = if meta.is_empty() { String::new() } else { format!(" - {}", meta.join("; ")) };
         let occurs_str = array_str;
-        
         writeln!(out, "{}  - **{}** (Level {}){}{}{}", prefix, name, level, occurs_str, redef_str, meta_str)?;
-        
         if let Some(children) = &item.children {
             print_data_items(out, children, indent + 1, show_section)?;
         }
@@ -309,10 +326,8 @@ fn print_working_storage<W: Write>(out: &mut W, ws_vars: &Option<Vec<DataItem>>)
     writeln!(out, "\n## Working-Storage Variables\n")?;
     if let Some(vars) = ws_vars {
         for item in vars {
-            if let Some(name) = &item.name {
-                if !name.is_empty() {
-                    print_data_items(out, &[item.clone()], 0, false)?;
-                }
+            if !get_str(&item.name).is_empty() {
+                print_data_items(out, &[item.clone()], 0, false)?;
             }
         }
     } else {
@@ -341,7 +356,25 @@ fn print_file_section<W: Write>(out: &mut W, file_sections: &Option<Vec<DataItem
     Ok(())
 }
 
-fn print_procedure_division<W: Write>(out: &mut W, paragraphs: &Option<Vec<Paragraph>>, all_paragraphs_out: &mut Vec<(String, String, Option<u32>)>) -> io::Result<()> {
+fn print_procedure_division<W: Write>(out: &mut W, ir: &IR, all_paragraphs_out: &mut Vec<(String, String, Option<u32>)>) -> io::Result<()> {
+    // Use procedure_division if available, otherwise fall back to paragraphs
+    let paragraphs = if let Some(pd) = &ir.procedure_division {
+        if let Some(sections) = &pd.sections {
+            // If we have sections, extract all paragraphs from all sections
+            let mut all_paras = Vec::new();
+            for section in sections {
+                if let Some(para_list) = &section.paragraphs {
+                    all_paras.extend(para_list.clone());
+                }
+            }
+            Some(all_paras)
+        } else {
+            None
+        }
+    } else {
+        ir.paragraphs.clone()
+    };
+
     if let Some(paras) = paragraphs {
         if paras.is_empty() {
             writeln!(out, "\n_No Procedure Division content found._")?;
@@ -358,8 +391,9 @@ fn print_procedure_division<W: Write>(out: &mut W, paragraphs: &Option<Vec<Parag
             let pname = para.name.as_deref().unwrap_or("");
             let section = para.section.as_deref().unwrap_or("");
             let line = para.line;
+            let _kind = para.kind.as_deref().unwrap_or("paragraph");
             let key = (pname.to_string(), section.to_string(), line);
-            para_map.insert(key.clone(), para);
+            para_map.insert(key.clone(), para.clone());
             if !pname.is_empty() {
                 all_paragraphs_out.push((pname.to_string(), section.to_string(), line));
             }
@@ -391,8 +425,13 @@ fn print_procedure_division<W: Write>(out: &mut W, paragraphs: &Option<Vec<Parag
             let line_info = if let Some(l) = line { format!(" (line {})", l) } else { String::new() };
             let src_info = if let Some(src) = &para.source_location { format!(" [{}]", src) } else { String::new() };
             let section_info = if !section.is_empty() { format!(" _(Section: {})_", section) } else { String::new() };
+            let kind_info = if para.kind.as_deref().unwrap_or("paragraph") != "paragraph" { 
+                format!(" _({})_", para.kind.as_deref().unwrap_or("paragraph")) 
+            } else { 
+                String::new() 
+            };
             
-            writeln!(out, "#### Paragraph: **{}**{}{}{}", pname, line_info, src_info, section_info)?;
+            writeln!(out, "#### Paragraph: **{}**{}{}{}{}", pname, line_info, src_info, section_info, kind_info)?;
             
             if !statements.is_empty() {
                 for stmt in statements {
@@ -400,11 +439,14 @@ fn print_procedure_division<W: Write>(out: &mut W, paragraphs: &Option<Vec<Parag
                     let raw = stmt.raw.as_deref().unwrap_or("");
                     let stmt_line = stmt.line;
                     let stmt_src = stmt.source_location.as_deref();
+                    let empty_operands = Vec::new();
+                    let operands = stmt.operands.as_ref().unwrap_or(&empty_operands);
                     
                     let stmt_info = if let Some(l) = stmt_line { format!(" (line {})", l) } else { String::new() };
                     let stmt_src_info = if let Some(src) = stmt_src { format!(" [{}]", src) } else { String::new() };
+                    let operands_info = if !operands.is_empty() { format!(" [{}]", operands.join(", ")) } else { String::new() };
                     
-                    writeln!(out, "- **{}**: {}{}{}", stype, raw, stmt_info, stmt_src_info)?;
+                    writeln!(out, "- **{}**: {}{}{}{}", stype, raw, operands_info, stmt_info, stmt_src_info)?;
                 }
             } else {
                 writeln!(out, "_No logic here_")?;
@@ -590,20 +632,24 @@ fn print_call_graph<W: Write>(out: &mut W, call_graph: &Option<Vec<CallEdge>>) -
         writeln!(out, "```")?;
         
         writeln!(out, "\n### Call Graph Table\n")?;
-        writeln!(out, "| **From** | **To** | **Type** |")?;
-        writeln!(out, "|------|----|------|")?;
+        writeln!(out, "| **From** | **To** | **Type** | **Kind** | **Line** | **Section** | **Source** |")?;
+        writeln!(out, "|------|----|------|------|------|---------|--------|")?;
         for edge in cg {
-            writeln!(out, "| **{}** | **{}** | {} |", 
+            writeln!(out, "| **{}** | **{}** | {} | {} | {} | {} | {} |", 
                 edge.from.as_deref().unwrap_or(""), 
                 edge.to.as_deref().unwrap_or(""), 
-                edge.edge_type.as_deref().unwrap_or(""))?;
+                edge.edge_type.as_deref().unwrap_or(""),
+                edge.kind.as_deref().unwrap_or("edge"),
+                edge.line.map(|l| l.to_string()).unwrap_or_else(|| "".to_string()),
+                edge.section.as_deref().unwrap_or(""),
+                edge.source_location.as_deref().unwrap_or(""))?;
         }
     }
     writeln!(out, "\n---\n")?;
     Ok(())
 }
 
-fn print_control_flow_graph<W: Write>(out: &mut W, cfg: &Option<Vec<CallEdge>>) -> io::Result<()> {
+fn print_control_flow_graph<W: Write>(out: &mut W, cfg: &Option<Vec<ControlFlowEdge>>) -> io::Result<()> {
     writeln!(out, "\n## Control Flow Graph\n")?;
     writeln!(out, "> **Legend:** Solid -> NEXT, Dotted -.-> GOTO, Solid -> PERFORM, Dashed --|VARYING|--> PERFORM VARYING")?;
     
@@ -702,7 +748,7 @@ fn main() -> io::Result<()> {
     }
     
     let mut all_paragraphs = Vec::new();
-    print_procedure_division(&mut output, &ir.paragraphs, &mut all_paragraphs)?;
+    print_procedure_division(&mut output, &ir, &mut all_paragraphs)?;
     
     print_call_graph(&mut output, &ir.call_graph)?;
     print_control_flow_graph(&mut output, &ir.control_flow_graph)?;

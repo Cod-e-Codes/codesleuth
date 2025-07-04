@@ -55,7 +55,7 @@ var analyzeCmd = &cobra.Command{
 		fmt.Printf("Found %d COBOL files:\n", len(files))
 		for _, f := range files {
 			fmt.Println(f)
-			parserArgs := []string{"..\\parser\\target\\release\\parser", f}
+			parserArgs := []string{"..\\parser\\target\\release\\parser.exe", f}
 			if verbose {
 				parserArgs = append(parserArgs, "--verbose")
 			}
@@ -76,7 +76,7 @@ var analyzeCmd = &cobra.Command{
 			fmt.Printf("Parsed: %s (program_name: %s)\n", ir.SourceFile, ir.ProgramName)
 
 			// Call Rust summarizer binary
-			sumCmd := exec.Command("..\\summarizer\\target\\release\\summarizer")
+			sumCmd := exec.Command("..\\summarizer\\target\\release\\summarizer.exe")
 			sumIn, err := sumCmd.StdinPipe()
 			if err != nil {
 				fmt.Printf("Error getting stdin pipe for Rust summarizer for %s: %v\n", f, err)
