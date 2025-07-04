@@ -24,12 +24,12 @@
 
 ```mermaid
 graph TD
-    A[Go CLI (cmd/main.go)] -->|spawns| B[Unified Rust Binary (codesleuth)]
-    B -->|parse| C[Parser Module]
-    B -->|summarize| D[Summarizer Module]
+    A["Go CLI (cmd/main.go)"] -->|spawns| B["Unified Rust Binary (codesleuth)"]
+    B -->|parse| C["Parser Module"]
+    B -->|summarize| D["Summarizer Module"]
     C -->|IR JSON| D
-    A -->|config/flags| E[Config Loader]
-    A -->|worker pool| F[Worker Goroutines]
+    A -->|config/flags| E["Config Loader"]
+    A -->|worker pool| F["Worker Goroutines"]
     F -->|analyze files| B
 ```
 
