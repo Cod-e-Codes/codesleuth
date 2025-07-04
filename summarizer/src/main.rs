@@ -21,6 +21,10 @@ struct Args {
     /// Enable verbose output
     #[arg(short, long)]
     verbose: bool,
+    
+    /// Enable debug output
+    #[arg(long)]
+    debug: bool,
 }
 
 static COBOL_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
@@ -210,8 +214,6 @@ fn get_str(val: &Option<serde_json::Value>) -> &str {
         ""
     }
 }
-
-
 
 fn format_value(val: &Option<serde_json::Value>) -> String {
     if let Some(v) = val {
@@ -739,6 +741,13 @@ fn main() -> io::Result<()> {
     } else {
         Box::new(io::stdout())
     };
+    
+    if args.debug {
+        eprintln!("[DEBUG] IR: {:#?}", ir);
+        // Add more detailed debug output here as needed
+    } else if args.verbose {
+        eprintln!("[VERBOSE] Program name: {}", ir.program_name.as_deref().unwrap_or("UNKNOWN"));
+    }
     
     print_program_info(&mut output, &ir)?;
     

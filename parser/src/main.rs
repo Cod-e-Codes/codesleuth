@@ -16,6 +16,9 @@ struct Args {
     /// Enable verbose debug output
     #[arg(long)]
     verbose: bool,
+    /// Enable debug output
+    #[arg(long)]
+    debug: bool,
 }
 
 // static RE_IDENT_DIV: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^\s*IDENTIFICATION DIVISION\s*\.?$").unwrap());
@@ -690,7 +693,10 @@ fn main() {
         call_graph,
         control_flow_graph,
     };
-    if args.verbose {
+    if args.debug {
+        eprintln!("[DEBUG] Full IR: {}", serde_json::to_string_pretty(&ir).unwrap());
+        // Add more detailed debug output here as needed
+    } else if args.verbose {
         eprintln!("[VERBOSE] Parsed IR: {}", serde_json::to_string_pretty(&ir).unwrap());
     }
     println!("{}", serde_json::to_string_pretty(&ir).unwrap());
