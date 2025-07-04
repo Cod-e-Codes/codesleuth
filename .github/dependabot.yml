@@ -16,10 +16,4 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "weekly"
-
-  # Python (pip)
-  - package-ecosystem: "pip"
-    directory: "/pytools"
-    schedule:
       interval: "weekly" 
