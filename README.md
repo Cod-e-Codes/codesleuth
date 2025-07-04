@@ -163,7 +163,7 @@ CodeSleuth is actively led and maintained by [your name/GitHub handle]. Major ar
 
 ---
 
-*Built for maintainers and developers working with legacy COBOL systems.* 
+## License
 
 This project is released under the MIT License; please credit the original author in any forks or derivative works.
 
