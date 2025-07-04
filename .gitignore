@@ -8,17 +8,12 @@ Cargo.lock
 *.out
 *.test
 *.log
-*.mod
-*.sum
 
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.egg-info/
+# Go modules (only ignore nested, keep root)
+!go.mod
+!go.sum
 
-# VSCode and editor files
+# Editor & OS files
 .vscode/
 *.swp
 *.swo
@@ -26,21 +21,28 @@ __pycache__/
 Thumbs.db
 
 # Ignore all COBOL and JCL files in test-cobol/
-test-cobol/**/*.cobol
+test-cobol/**/*.cob
 test-cobol/**/*.cbl
-test-cobol/**/*.jcl
 test-cobol/**/*.CBL
+test-cobol/**/*.cobol
+test-cobol/**/*.jcl
 test-cobol/**/*.JCL
 
-# Optionally keep a couple of demo files (uncomment if you want to keep these)
+# Ignore dummy/generated files
+benchmark-cobol/
+dummy-cobol/
+
+# Keep optional demo COBOL files (uncomment if needed)
 #!test-cobol/HELLO.cobol
 #!test-cobol/HELLO.jcl
 
-# Ignore all courseware and large datasets
+# Ignore full courseware dumps
 test-cobol/cobol-programming-course-master/
 
-# Ignore binaries
-*.exe
+# Ignore data files and temp folders
+test-cobol/
+
+# Ignore compiled binary artifacts (cross-platform)
 *.dll
 *.so
 *.dylib
@@ -55,11 +57,3 @@ test-cobol/cobol-programming-course-master/
 *.jar
 *.war
 *.ear
-
-# Ignore data files
-test-cobol/data
-test-cobol/xdata
-
-# Allow go.mod and go.sum in the project root
-!go.mod
-!go.sum 
