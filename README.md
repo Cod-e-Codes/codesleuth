@@ -3,6 +3,7 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-Contributor%20Covenant-blueviolet.svg)](CODE_OF_CONDUCT.md)
+[![Feature: Concurrency Worker Pool](https://img.shields.io/badge/feature-concurrency--worker--pool-blueviolet)](https://github.com/Cod-e-Codes/codesleuth/tree/feat/concurrency-worker-pool)
 
 **CodeSleuth** is a code intelligence CLI tool for analyzing legacy COBOL codebases. It is built with Rust and Go, providing a modular architecture for parsing, analysis, and reporting.
 
