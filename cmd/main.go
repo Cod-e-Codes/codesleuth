@@ -1,22 +1,27 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 )
 
 var verbose bool
 var debug bool
+var workers int
+var benchmark bool
 
 func init() {
 	analyzeCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose output")
 	analyzeCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug output")
+	analyzeCmd.Flags().IntVar(&workers, "workers", runtime.NumCPU(), "Number of concurrent workers (default: number of logical CPUs)")
+	analyzeCmd.Flags().BoolVar(&benchmark, "benchmark", false, "Enable benchmarking mode (measure throughput, resource usage, etc.)")
 }
 
 func main() {
@@ -25,6 +30,7 @@ func main() {
 		Short: "CodeSleuth is a multi-language code intelligence CLI tool",
 	}
 
+	AddConfigFlags(rootCmd)
 	rootCmd.AddCommand(analyzeCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -38,9 +44,17 @@ var analyzeCmd = &cobra.Command{
 	Short: "Analyze legacy code in the specified path",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		root := args[0]
+		config, err := LoadConfig()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Config error: %v\n", err)
+			os.Exit(1)
+		}
+		root := config.InputDir
+		if root == "" {
+			root = args[0]
+		}
 		var files []string
-		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -57,65 +71,82 @@ var analyzeCmd = &cobra.Command{
 		fmt.Printf("Found %d COBOL files:\n", len(files))
 		for _, f := range files {
 			fmt.Println(f)
-			parserArgs := []string{"..\\parser\\target\\release\\parser.exe", f}
-			if verbose {
-				parserArgs = append(parserArgs, "--verbose")
-			}
-			if debug {
-				parserArgs = append(parserArgs, "--debug")
-			}
-			parserCmd := exec.Command(parserArgs[0], parserArgs[1:]...)
-			var parserStdout, parserStderr strings.Builder
-			parserCmd.Stdout = &parserStdout
-			parserCmd.Stderr = &parserStderr
-			err := parserCmd.Run()
-			if (verbose || debug) && parserStderr.Len() > 0 {
-				fmt.Fprint(os.Stderr, parserStderr.String())
-			}
-			if err != nil {
-				fmt.Printf("Error running parser on %s: %v\n", f, err)
-				continue
-			}
-			var ir struct {
-				ProgramName string `json:"program_name"`
-				SourceFile  string `json:"source_file"`
-			}
-			if err := json.Unmarshal([]byte(parserStdout.String()), &ir); err != nil {
-				fmt.Printf("Error parsing IR JSON for %s: %v\n", f, err)
-				continue
-			}
-			fmt.Printf("Parsed: %s (program_name: %s)\n", ir.SourceFile, ir.ProgramName)
-
-			// Call Rust summarizer binary
-			sumArgs := []string{"..\\summarizer\\target\\release\\summarizer.exe"}
-			if verbose {
-				sumArgs = append(sumArgs, "--verbose")
-			}
-			if debug {
-				sumArgs = append(sumArgs, "--debug")
-			}
-			sumCmd := exec.Command(sumArgs[0], sumArgs[1:]...)
-			var sumStdout, sumStderr strings.Builder
-			sumCmd.Stdout = &sumStdout
-			sumCmd.Stderr = &sumStderr
-			sumIn, err := sumCmd.StdinPipe()
-			if err != nil {
-				fmt.Printf("Error getting stdin pipe for Rust summarizer for %s: %v\n", f, err)
-				continue
-			}
-			go func() {
-				sumIn.Write([]byte(parserStdout.String()))
-				sumIn.Close()
-			}()
-			err = sumCmd.Run()
-			if (verbose || debug) && sumStderr.Len() > 0 {
-				fmt.Fprint(os.Stderr, sumStderr.String())
-			}
-			if err != nil {
-				fmt.Printf("Rust summarizer failed for %s: %v\n", f, err)
-			}
-			fmt.Println(sumStdout.String())
 		}
-		// TODO: Call Rust parser and Python pipeline here
+
+		fileCh := make(chan string, workers*2)
+		resultCh := make(chan string, workers)
+		errCh := make(chan error, workers)
+		var wg sync.WaitGroup
+
+		workerFunc := func(f string) {
+			rustBin := config.RustBackendPath
+			if rustBin == "" {
+				exePath, err := os.Executable()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "failed to get executable path: %v\n", err)
+					return
+				}
+				exeDir := filepath.Dir(exePath)
+				rustBin = filepath.Join(exeDir, "..", "codesleuth", "target", "release", "codesleuth.exe")
+			}
+			if _, statErr := os.Stat(rustBin); statErr != nil {
+				fmt.Fprintf(os.Stderr, "rust backend not found at %s: %v\n", rustBin, statErr)
+				return
+			}
+			rustArgs := []string{rustBin, "analyze", f}
+			if verbose {
+				rustArgs = append(rustArgs, "--verbose")
+			}
+			if debug {
+				rustArgs = append(rustArgs, "--debug")
+			}
+			rustCmd := exec.Command(rustArgs[0], rustArgs[1:]...)
+			var rustStdout, rustStderr strings.Builder
+			rustCmd.Stdout = &rustStdout
+			rustCmd.Stderr = &rustStderr
+			err := rustCmd.Run()
+			if (verbose || debug) && rustStderr.Len() > 0 {
+				fmt.Fprint(os.Stderr, rustStderr.String())
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error running codesleuth analyze on %s: %v\n", f, err)
+				return
+			}
+			fmt.Printf("Analyzed: %s\n%s", f, rustStdout.String())
+		}
+
+		if benchmark {
+			bm := RunBenchmark(files, workerFunc)
+			bm.PrintSummaryTable()
+			bm.PrintSummaryJSON()
+			return
+		}
+
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+				for f := range fileCh {
+					workerFunc(f)
+				}
+			}()
+		}
+
+		go func() {
+			for _, f := range files {
+				fileCh <- f
+			}
+			close(fileCh)
+		}()
+
+		for i := 0; i < len(files); i++ {
+			select {
+			case res := <-resultCh:
+				fmt.Println(res)
+			case err := <-errCh:
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}
+		wg.Wait()
 	},
 }

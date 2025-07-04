@@ -33,6 +33,60 @@ Thank you for your interest in contributing to CodeSleuth! We welcome bug report
 
 For questions, open an issue or contact Cody Marsengill at cod.e.codes.dev@gmail.com.
 
+## Setup Instructions
+
+1. **Install Rust** (1.70+): https://rustup.rs/
+2. **Install Go** (1.21+): https://golang.org/dl/
+3. **Clone the repo:**
+   ```sh
+   git clone https://github.com/Cod-e-Codes/codesleuth.git
+   cd codesleuth
+   ```
+4. **Install Go dependencies:**
+   ```sh
+   cd cmd && go mod tidy && cd ..
+   ```
+5. **Build Rust backend:**
+   ```sh
+   cargo build --release --manifest-path codesleuth/Cargo.toml
+   ```
+6. **Build Go CLI:**
+   ```sh
+   cd cmd && go build -o codesleuth.exe && cd ..
+   ```
+
+## Local Development & Test Workflow
+
+- **Unit tests (Go):**
+  ```sh
+  cd cmd && go test ./...
+  ```
+- **Unit/integration tests (Rust):**
+  ```sh
+  cd codesleuth && cargo test
+  ```
+- **Run CLI locally:**
+  ```sh
+  ./cmd/codesleuth.exe analyze --workers=4 --benchmark test-cobol
+  ```
+- **Generate dummy COBOL files for benchmarking:**
+  ```sh
+  go run scripts/generate_dummy_cobol.go --count=1000 --outdir=bench-cobol
+  ```
+
+## Code Standards
+
+- **Rust:**
+  - Use `cargo fmt` and `cargo clippy` before committing.
+  - Follow idiomatic Rust style and error handling.
+- **Go:**
+  - Use `gofmt` and `go vet` before committing.
+  - Use clear, descriptive names and idiomatic Go patterns.
+- **General:**
+  - Write tests for new features and bugfixes.
+  - Document complex logic with comments/docstrings.
+  - Keep PRs focused and well-described.
+
 ---
 
 Happy coding! 
