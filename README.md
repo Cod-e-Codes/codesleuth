@@ -103,7 +103,6 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 - [GitHub Repository](https://github.com/Cod-e-Codes/codesleuth)
 - [Rust Programming Language](https://www.rust-lang.org/)
 - [Go Programming Language](https://golang.org/)
-- [COBOL Resources](https://www.microfocus.com/en-us/products/cobol/overview)
 
 ---
 
