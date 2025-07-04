@@ -4,35 +4,31 @@
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-Contributor%20Covenant-blueviolet.svg)](CODE_OF_CONDUCT.md)
 
-**CodeSleuth** is a high-performance, multi-language code intelligence CLI tool designed for legacy COBOL analysis. Built with Rust and Go, it provides fast parsing, comprehensive analysis, and actionable insights for enterprise codebases.
+**CodeSleuth** is a code intelligence CLI tool for analyzing legacy COBOL codebases. It is built with Rust and Go, providing a modular architecture for parsing, analysis, and reporting.
 
 ---
 
-## 🚀 Features
+## Features
 
-- **⚡ High-Performance Parsing:** Rust-based COBOL parser with 10-50x faster processing
-- **📊 Comprehensive Analysis:** Program structure, data division, procedure logic, call/control flow, and I/O analysis
-- **📝 Rich Markdown Reports:** Detailed summaries with Mermaid diagrams for call and control flow visualization
-- **🔍 Dead Code Detection:** Identifies unused paragraphs and variables
-- **🏗️ Modular Architecture:** Clean separation between parser, CLI, and summarizer components
-- **🔧 Modern CLI:** Intuitive command-line interface with verbose/debug options
-- **🛡️ Security Focused:** Comprehensive security policy and responsible disclosure
-- **🔄 CI/CD Ready:** Automated testing and linting via GitHub Actions
-
----
-
-## 🛠️ Architecture
-
-CodeSleuth uses a modern, efficient architecture:
-
-- **Rust Parser** (`parser/`): Fast COBOL parsing and IR generation
-- **Rust Summarizer** (`summarizer/`): High-performance Markdown report generation
-- **Go CLI** (`cmd/`): User-friendly command-line interface
-- **Cross-platform:** Works on Windows, macOS, and Linux
+- **COBOL Parsing:** Rust-based parser for extracting program structure and metadata
+- **Analysis & Summarization:** Generates Markdown reports with program structure, data division, procedure logic, call/control flow, and I/O analysis
+- **Dead Code Detection:** Identifies unused paragraphs and variables
+- **Call & Control Flow Visualization:** Mermaid diagrams for call and control flow
+- **Modern CLI:** Go-based command-line interface with verbose/debug options
+- **Cross-platform:** Runs on Windows, macOS, and Linux
+- **CI/CD Ready:** Automated testing and linting via GitHub Actions
 
 ---
 
-## 📦 Installation
+## Architecture
+
+- **Rust Parser** (`parser/`): Parses COBOL source files and outputs an intermediate representation (IR) as JSON
+- **Rust Summarizer** (`summarizer/`): Consumes IR and generates Markdown reports
+- **Go CLI** (`cmd/`): Orchestrates parsing and summarization, providing a user-facing CLI
+
+---
+
+## Installation
 
 ### Prerequisites
 
@@ -57,7 +53,7 @@ cd cmd && go build -o codesleuth && cd ..
 
 ---
 
-## 🚀 Quick Start
+## Usage
 
 ```bash
 # Analyze a COBOL file or directory
@@ -69,25 +65,25 @@ cd cmd && go build -o codesleuth && cd ..
 
 ### Example Output
 
-CodeSleuth generates comprehensive Markdown reports including:
+The tool generates Markdown reports with:
 
 - **Program Information:** Name, author, date, comments
 - **Data Division:** Working storage and file section analysis
 - **Procedure Division:** Paragraph structure and statement analysis
 - **Call Graph:** Visual representation of program flow
-- **Control Flow:** Detailed execution path analysis
+- **Control Flow:** Execution path analysis
 - **Variable Usage:** Read/write analysis for all variables
 - **Dead Code Detection:** Unused paragraphs and variables
 
 ---
 
-## 📋 Usage Examples
+## CLI Examples
 
 ```bash
 # Analyze a single file
 ./cmd/codesleuth analyze program.cbl
 
-# Analyze entire directory with verbose output
+# Analyze a directory with verbose output
 ./cmd/codesleuth analyze --verbose /path/to/cobol/projects/
 
 # Generate report to file
@@ -99,36 +95,31 @@ CodeSleuth generates comprehensive Markdown reports including:
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
-CodeSleuth is designed to work out-of-the-box with minimal configuration. The tool automatically detects COBOL files (`.cob`, `.cbl`, `.cobol`) and generates appropriate analysis reports.
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
-
-- Code style and standards
-- Testing requirements
-- Pull request process
-- Issue reporting
+CodeSleuth works out-of-the-box. It automatically detects COBOL files (`.cob`, `.cbl`, `.cobol`) and generates analysis reports. No additional configuration is required for standard use cases.
 
 ---
 
-## 🛡️ Security
+## Contributing
 
-Found a security vulnerability? Please review our [Security Policy](SECURITY.md) for responsible disclosure guidelines.
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing, pull requests, and issue reporting.
 
 ---
 
-## 🔗 Links
+## Security
+
+If you discover a security vulnerability, please see [SECURITY.md](SECURITY.md) for responsible disclosure guidelines.
+
+---
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+---
+
+## Links
 
 - [GitHub Repository](https://github.com/Cod-e-Codes/codesleuth)
 - [Rust Programming Language](https://www.rust-lang.org/)
@@ -137,15 +128,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 📈 Performance
-
-CodeSleuth's Rust-based architecture provides significant performance improvements:
-
-- **10-50x faster** than Python-based alternatives
-- **Lower memory usage** for large codebases
-- **Faster startup times** with compiled binaries
-- **Better concurrency** for parallel processing
-
----
-
-*Built with ❤️ for the enterprise development community.* 
+*Built for maintainers and developers working with legacy COBOL systems.* 
