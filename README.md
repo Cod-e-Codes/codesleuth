@@ -82,7 +82,7 @@ CodeSleuth works out-of-the-box. It automatically detects COBOL files (`.cob`, `
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing, pull requests, and issue reporting.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing, pull requests, and issue reporting.
 
 ---
 
@@ -116,7 +116,7 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 - **Performance Benchmarks:** Publish real-world benchmarks as the tool matures.
 - **CI/CD Integration:** Enhanced support for integration with CI/CD pipelines and code quality gates.
 
-Contributions and suggestions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved.
+Contributions and suggestions are welcome!
 
 ---
 
