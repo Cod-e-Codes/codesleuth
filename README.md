@@ -61,11 +61,7 @@ cd cmd && go build -o codesleuth && cd ..
 
 # Generate a report file
 ./cmd/codesleuth analyze test-cobol/ > analysis_report.md
-```
 
-## CLI Examples
-
-```bash
 # Analyze a single file
 ./cmd/codesleuth analyze program.cbl
 
