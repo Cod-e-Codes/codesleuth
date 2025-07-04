@@ -63,20 +63,6 @@ cd cmd && go build -o codesleuth && cd ..
 ./cmd/codesleuth analyze test-cobol/ > analysis_report.md
 ```
 
-### Example Output
-
-The tool generates Markdown reports with:
-
-- **Program Information:** Name, author, date, comments
-- **Data Division:** Working storage and file section analysis
-- **Procedure Division:** Paragraph structure and statement analysis
-- **Call Graph:** Visual representation of program flow
-- **Control Flow:** Execution path analysis
-- **Variable Usage:** Read/write analysis for all variables
-- **Dead Code Detection:** Unused paragraphs and variables
-
----
-
 ## CLI Examples
 
 ```bash
