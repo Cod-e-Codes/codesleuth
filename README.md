@@ -163,7 +163,7 @@ CodeSleuth is actively led and maintained by [your name/GitHub handle]. Major ar
 
 ---
 
-*Built for maintainers and developers working with legacy COBOL systems.* 
+## License
 
 This project is released under the MIT License; please credit the original author in any forks or derivative works.
 
@@ -177,15 +177,5 @@ This project is released under the MIT License; please credit the original autho
 
 ---
 
-## Roadmap & Future Enhancements
-
-- **Unified Backend & Concurrency:** Planned for the next release (see feature branch for early access)
-- **Configurable Output:** More options for customizing report formats and output destinations.
-- **Plugin System:** Extensible architecture for custom analysis or reporting plugins.
-- **Improved Error Handling:** More robust diagnostics and user feedback for parsing and analysis errors.
-- **Performance Benchmarks:** Publish real-world benchmarks as the tool matures.
-- **CI/CD Integration:** Enhanced support for integration with CI/CD pipelines and code quality gates.
-
----
-
 *Built for maintainers and developers working with legacy COBOL systems.* 
+
