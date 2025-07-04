@@ -128,4 +128,18 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ---
 
+## Roadmap & Future Enhancements
+
+- **Concurrency:** Planned support for parallel analysis of multiple files to improve performance on large codebases.
+- **Language Support:** Potential expansion to support additional legacy languages beyond COBOL.
+- **Configurable Output:** More options for customizing report formats and output destinations.
+- **Plugin System:** Extensible architecture for custom analysis or reporting plugins.
+- **Improved Error Handling:** More robust diagnostics and user feedback for parsing and analysis errors.
+- **Performance Benchmarks:** Publish real-world benchmarks as the tool matures.
+- **CI/CD Integration:** Enhanced support for integration with CI/CD pipelines and code quality gates.
+
+Contributions and suggestions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved.
+
+---
+
 *Built for maintainers and developers working with legacy COBOL systems.* 
