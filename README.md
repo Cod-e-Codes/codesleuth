@@ -18,6 +18,8 @@ Enterprise COBOL codebases are often large, undocumented, and hard to modernize.
 > **Note:**
 > This is the `main` branch. It currently uses a single-threaded Go CLI and separate Rust parser/summarizer binaries. **Unified backend and concurrency are available on the [`feat/concurrency-worker-pool`](https://github.com/Cod-e-Codes/codesleuth/tree/feat/concurrency-worker-pool) branch and will be merged soon.**
 
+> ⚡ **Concurrency/worker pool is in progress and NOT yet on `main`. If you want to help or test, please join the [feature branch](https://github.com/Cod-e-Codes/codesleuth/tree/feat/concurrency-worker-pool) instead of starting a competing fork!**
+
 ---
 
 ## Features
@@ -130,21 +132,40 @@ CodeSleuth works out-of-the-box. It automatically detects COBOL files (`.cob`, `
 
 ---
 
-## Contributing
+## How to Get Involved
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing, pull requests, and issue reporting.
-
----
-
-## Security
-
-If you discover a security vulnerability, please see [SECURITY.md](SECURITY.md) for responsible disclosure guidelines.
+- ⭐ Star the repo to show support.
+- 🧪 Try the tool on your COBOL codebase and [open an issue](https://github.com/Cod-e-Codes/codesleuth/issues) with feedback.
+- 🛠️ For concurrency/back-end improvements, comment on or join the feature branch discussion.
+- 📚 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards and PR steps.
 
 ---
 
-## License
+## Known Limitations
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+- Current release is single-threaded; large codebases may process slowly until concurrency lands in `main`.
+- Some COBOL dialects or edge-case constructs may not be fully supported—please report any parsing issues.
+
+---
+
+## Roadmap & Future Enhancements
+
+- **Unified Backend & Concurrency:** Planned for the next release (see feature branch for early access)
+- **Configurable Output:** More options for customizing report formats and output destinations.
+- **Plugin System:** Extensible architecture for custom analysis or reporting plugins.
+- **Improved Error Handling:** More robust diagnostics and user feedback for parsing and analysis errors.
+- **Performance Benchmarks:** Publish real-world benchmarks as the tool matures.
+- **CI/CD Integration:** Enhanced support for integration with CI/CD pipelines and code quality gates.
+
+## Author & Project Direction
+
+CodeSleuth is actively led and maintained by [your name/GitHub handle]. Major architectural changes (such as the concurrency backend) are planned and documented—see the Roadmap and [feature branch](https://github.com/Cod-e-Codes/codesleuth/tree/feat/concurrency-worker-pool). Community contributions are welcome; please open issues or discussions for significant proposals.
+
+---
+
+*Built for maintainers and developers working with legacy COBOL systems.* 
+
+This project is released under the MIT License; please credit the original author in any forks or derivative works.
 
 ---
 
