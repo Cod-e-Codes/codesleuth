@@ -1,2 +1,0 @@
-# Python requirements for CodeSleuth summarizer
-argparse 

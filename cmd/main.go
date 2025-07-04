@@ -75,20 +75,20 @@ var analyzeCmd = &cobra.Command{
 			}
 			fmt.Printf("Parsed: %s (program_name: %s)\n", ir.SourceFile, ir.ProgramName)
 
-			// Call Python summary script
-			pyCmd := exec.Command("python", "..\\pytools\\summary.py")
-			pyIn, err := pyCmd.StdinPipe()
+			// Call Rust summarizer binary
+			sumCmd := exec.Command("..\\summarizer\\target\\release\\summarizer")
+			sumIn, err := sumCmd.StdinPipe()
 			if err != nil {
-				fmt.Printf("Error getting stdin pipe for Python summary for %s: %v\n", f, err)
+				fmt.Printf("Error getting stdin pipe for Rust summarizer for %s: %v\n", f, err)
 				continue
 			}
 			go func() {
-				pyIn.Write(output)
-				pyIn.Close()
+				sumIn.Write(output)
+				sumIn.Close()
 			}()
-			summary, err := pyCmd.CombinedOutput()
+			summary, err := sumCmd.CombinedOutput()
 			if err != nil {
-				fmt.Printf("Python summary script failed for %s: %v\n", f, err)
+				fmt.Printf("Rust summarizer failed for %s: %v\n", f, err)
 			}
 			fmt.Println(string(summary))
 		}

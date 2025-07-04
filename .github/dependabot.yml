@@ -1,8 +1,14 @@
 version: 2
 updates:
-  # Rust (Cargo)
+  # Rust (Cargo) - Parser
   - package-ecosystem: "cargo"
     directory: "/parser"
+    schedule:
+      interval: "weekly"
+
+  # Rust (Cargo) - Summarizer
+  - package-ecosystem: "cargo"
+    directory: "/summarizer"
     schedule:
       interval: "weekly"
 

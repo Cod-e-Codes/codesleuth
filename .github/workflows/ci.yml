@@ -11,16 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.8'
-      - name: Install Python dependencies
-        run: |
-          pip install -r pytools/requirements.txt || pip install argparse
-      - name: Lint Python
-        run: |
-          python -m py_compile pytools/summary.py
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -29,10 +19,17 @@ jobs:
       - name: Build Rust parser
         run: |
           cd parser && cargo build --release
+      - name: Build Rust summarizer
+        run: |
+          cd summarizer && cargo build --release
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
       - name: Build Go CLI
         run: |
-          cd cmd && go build -o codesleuth.exe 
+          cd cmd && go build -o codesleuth.exe
+      - name: Test pipeline
+        run: |
+          # Test that the pipeline works end-to-end
+          echo '{"program_name":"TEST","source_file":"test.cbl"}' | ./summarizer/target/release/summarizer 
