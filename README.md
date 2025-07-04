@@ -56,22 +56,19 @@ cd cmd && go build -o codesleuth && cd ..
 ## Usage
 
 ```bash
-# Analyze a COBOL file or directory
-./cmd/codesleuth analyze --verbose path/to/your/cobol/files
+# Analyze a COBOL file or directory (basic usage)
+./cmd/codesleuth analyze path/to/your/cobol/files
 
-# Generate a report file
-./cmd/codesleuth analyze test-cobol/ > analysis_report.md
+# Enable verbose output
+./cmd/codesleuth analyze --verbose path/to/your/cobol/files
 
 # Analyze a single file
 ./cmd/codesleuth analyze program.cbl
 
-# Analyze a directory with verbose output
-./cmd/codesleuth analyze --verbose /path/to/cobol/projects/
+# Output analysis to a Markdown file
+./cmd/codesleuth analyze path/to/your/cobol/files > analysis_report.md
 
-# Generate report to file
-./cmd/codesleuth analyze legacy-system/ > system_analysis.md
-
-# Analyze with debug information
+# Analyze with debug information (verbose + debug)
 ./cmd/codesleuth analyze --verbose --debug complex-program.cbl
 ```
 
