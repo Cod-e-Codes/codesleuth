@@ -20,16 +20,6 @@
 
 ---
 
-## Benchmarks
-
-| Files | Time (s) | Throughput (files/sec) | CPU Usage (s) | Max RAM (MB) |
-|-------|----------|------------------------|---------------|--------------|
-| 1,000 | 36.4     | 27.5                   | 32.1          | 120          |
-| 10,000| 364      | 27.5                   | 320           | 180          |
-| 100,000| 3640    | 27.5                   | 3200          | 350          |
-
-_Benchmarks run on 8-core Intel i7, Windows 10, Go 1.21, Rust 1.70. See scripts/generate_dummy_cobol.go for synthetic test generation._
-
 ## Architecture Diagram
 
 ```mermaid
