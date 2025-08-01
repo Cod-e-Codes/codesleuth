@@ -168,7 +168,7 @@ CodeSleuth is actively led and maintained by [your name/GitHub handle]. Major ar
 This project is released under the MIT License; please credit the original author in any forks or derivative works.
 
 > **Commercial Use:**  
-> If your organization is interested in using CodeSleuth in a proprietary, enterprise, or commercial environment and would like dedicated support, licensing, or integration help, please [contact the maintainer](mailto:cod.e.codes.dev@gmail.com) to discuss commercial licensing options.
+> Organizations interested in using CodeSleuth in proprietary, enterprise, or commercial environments — including use cases requiring dedicated support, custom licensing, or integration assistance — are encouraged to [contact the maintainer](mailto:cod.e.codes.dev@gmail.com) to discuss commercial licensing options.
 
 ---
 
@@ -181,5 +181,6 @@ This project is released under the MIT License; please credit the original autho
 ---
 
 *Built for maintainers and developers working with legacy COBOL systems.* 
+
 
 
