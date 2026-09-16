@@ -79,10 +79,7 @@ fn infer_type_from_pic(pic: &str) -> String {
     if pic.starts_with('X') || pic.contains("X(") {
         return "string".to_string();
     }
-    if pic.contains('9') {
-        if pic.contains('V') || pic.contains('.') {
-            return "float".to_string();
-        }
+    if pic.contains('9') || pic.contains('$') || pic.contains('Z') {
         return "numeric".to_string();
     }
     if pic.contains("COMP") {
@@ -119,6 +116,31 @@ fn item_is_comp3(pic: Option<&str>, usage: Option<&str>) -> bool {
 
 fn is_cobol_comment_or_blank(line: &str) -> bool {
     cobol::is_cobol_comment_or_blank(line)
+}
+
+fn identification_comment_text(line: &str) -> Option<String> {
+    if !is_cobol_comment_or_blank(line) {
+        return None;
+    }
+    let t = line.trim();
+    if t.is_empty() || !t.starts_with('*') {
+        return None;
+    }
+    let body = t
+        .trim_start_matches('*')
+        .trim()
+        .trim_end_matches('*')
+        .trim();
+    if body.is_empty() {
+        return None;
+    }
+    if body
+        .chars()
+        .all(|c| matches!(c, '-' | '=' | '+' | '*' | '.' | '_' | ' '))
+    {
+        return None;
+    }
+    Some(body.to_string())
 }
 
 fn has_terminator_period(s: &str) -> bool {
@@ -228,8 +250,8 @@ fn parse_identification_division(source: &str) -> (String, String, String, Vec<S
                 }
             } else if pending_program_id {
                 if is_cobol_comment_or_blank(line) {
-                    if line.trim_start().starts_with('*') {
-                        comments.push(line.trim_start_matches('*').trim().to_string());
+                    if let Some(text) = identification_comment_text(line) {
+                        comments.push(text);
                     }
                 } else if let Some(tok) = line.split_whitespace().next() {
                     program_name = tok.trim_end_matches('.').to_string();
@@ -245,8 +267,8 @@ fn parse_identification_division(source: &str) -> (String, String, String, Vec<S
                     .get(1)
                     .map(|m| m.as_str().trim_end_matches('.').to_string())
                     .unwrap_or_default();
-            } else if line.trim_start().starts_with('*') {
-                comments.push(line.trim_start_matches('*').trim().to_string());
+            } else if let Some(text) = identification_comment_text(line) {
+                comments.push(text);
             }
         }
     }
@@ -358,7 +380,7 @@ fn extract_variable_usage(
             .iter()
             .filter(|op| {
                 let opu = cobol::normalize_name(op);
-                !cobol::KEYWORDS.contains(opu.as_str())
+                cobol::is_valid_identifier(op)
                     && !cobol::is_literal(op)
                     && !para_name_map.contains_key(&opu)
             })
@@ -592,6 +614,62 @@ fn record_statement(
     }
 }
 
+fn statement_first_token(line: &str) -> String {
+    cobol::split_cobol_tokens(line)
+        .into_iter()
+        .next()
+        .map(|s| s.trim_end_matches('.').to_uppercase())
+        .unwrap_or_default()
+}
+
+struct StmtCtx<'a> {
+    para: &'a mut Option<Paragraph>,
+    paragraph_name: &'a str,
+    section: &'a Option<ProcedureSection>,
+    para_name_map: &'a HashMap<String, String>,
+    call_graph: &'a mut Vec<CallGraphEntry>,
+}
+
+fn flush_pending_statement(pending: &mut Option<(usize, String)>, ctx: &mut StmtCtx<'_>) {
+    if let Some((line_no, raw)) = pending.take() {
+        if let Some(ref mut p) = ctx.para {
+            record_statement(
+                p,
+                ctx.paragraph_name,
+                ctx.section,
+                &raw,
+                line_no,
+                ctx.para_name_map,
+                ctx.call_graph,
+            );
+        }
+    }
+}
+
+fn accumulate_statement(
+    pending: &mut Option<(usize, String)>,
+    line: &str,
+    line_no: usize,
+    ctx: &mut StmtCtx<'_>,
+) {
+    let tok = statement_first_token(line);
+    if pending.is_some() && cobol::is_statement_verb(&tok) {
+        flush_pending_statement(pending, ctx);
+    }
+    if let Some((_, buf)) = pending.as_mut() {
+        buf.push(' ');
+        buf.push_str(line.trim());
+    } else {
+        *pending = Some((line_no, line.trim().to_string()));
+    }
+    if pending
+        .as_ref()
+        .is_some_and(|(_, raw)| has_terminator_period(raw))
+    {
+        flush_pending_statement(pending, ctx);
+    }
+}
+
 fn parse_procedure_division_and_call_graph(
     source: &str,
     program_name: &str,
@@ -646,6 +724,7 @@ fn parse_procedure_division_and_call_graph(
     let mut control_flow_graph = Vec::new();
     let mut all_paragraphs_flat: Vec<Paragraph> = Vec::new();
     let mut exec_sql: Option<(usize, String)> = None;
+    let mut stmt_pending: Option<(usize, String)> = None;
     for (i, line) in source.lines().enumerate() {
         let line = line.trim_end();
         if consume_procedure_header(line, &mut in_proc, &mut skip_using) {
@@ -675,6 +754,16 @@ fn parse_procedure_division_and_call_graph(
                 continue;
             }
             if starts_exec_sql(line) {
+                flush_pending_statement(
+                    &mut stmt_pending,
+                    &mut StmtCtx {
+                        para: &mut current_paragraph,
+                        paragraph_name: &current_paragraph_name,
+                        section: &current_section,
+                        para_name_map: &para_name_map,
+                        call_graph: &mut call_graph,
+                    },
+                );
                 if ends_exec(line) {
                     ensure_paragraph(
                         &mut current_paragraph,
@@ -692,6 +781,16 @@ fn parse_procedure_division_and_call_graph(
                 continue;
             }
             if let Some(sec_caps) = re_section.captures(line) {
+                flush_pending_statement(
+                    &mut stmt_pending,
+                    &mut StmtCtx {
+                        para: &mut current_paragraph,
+                        paragraph_name: &current_paragraph_name,
+                        section: &current_section,
+                        para_name_map: &para_name_map,
+                        call_graph: &mut call_graph,
+                    },
+                );
                 finish_paragraph(
                     &mut current_paragraph,
                     &mut current_section,
@@ -723,19 +822,30 @@ fn parse_procedure_division_and_call_graph(
                         program_name,
                         i + 1,
                     );
-                    if let Some(ref mut para) = current_paragraph {
-                        record_statement(
-                            para,
-                            &current_paragraph_name,
-                            &current_section,
-                            line,
-                            i + 1,
-                            &para_name_map,
-                            &mut call_graph,
-                        );
-                    }
+                    accumulate_statement(
+                        &mut stmt_pending,
+                        line,
+                        i + 1,
+                        &mut StmtCtx {
+                            para: &mut current_paragraph,
+                            paragraph_name: &current_paragraph_name,
+                            section: &current_section,
+                            para_name_map: &para_name_map,
+                            call_graph: &mut call_graph,
+                        },
+                    );
                     continue;
                 }
+                flush_pending_statement(
+                    &mut stmt_pending,
+                    &mut StmtCtx {
+                        para: &mut current_paragraph,
+                        paragraph_name: &current_paragraph_name,
+                        section: &current_section,
+                        para_name_map: &para_name_map,
+                        call_graph: &mut call_graph,
+                    },
+                );
                 finish_paragraph(
                     &mut current_paragraph,
                     &mut current_section,
@@ -761,20 +871,31 @@ fn parse_procedure_division_and_call_graph(
                     program_name,
                     i + 1,
                 );
-                if let Some(ref mut para) = current_paragraph {
-                    record_statement(
-                        para,
-                        &current_paragraph_name,
-                        &current_section,
-                        line,
-                        i + 1,
-                        &para_name_map,
-                        &mut call_graph,
-                    );
-                }
+                accumulate_statement(
+                    &mut stmt_pending,
+                    line,
+                    i + 1,
+                    &mut StmtCtx {
+                        para: &mut current_paragraph,
+                        paragraph_name: &current_paragraph_name,
+                        section: &current_section,
+                        para_name_map: &para_name_map,
+                        call_graph: &mut call_graph,
+                    },
+                );
             }
         }
     }
+    flush_pending_statement(
+        &mut stmt_pending,
+        &mut StmtCtx {
+            para: &mut current_paragraph,
+            paragraph_name: &current_paragraph_name,
+            section: &current_section,
+            para_name_map: &para_name_map,
+            call_graph: &mut call_graph,
+        },
+    );
     finish_paragraph(
         &mut current_paragraph,
         &mut current_section,

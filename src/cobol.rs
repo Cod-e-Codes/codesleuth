@@ -54,8 +54,93 @@ pub static KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
         "EXTEND",
         "CURRENT-DATE",
         "GOBACK",
+        "GIVING",
+        "CONVERTING",
+        "TIMES",
+        "LINES",
+        "INSPECT",
+        "ACCEPT",
+        "ADD",
+        "SUBTRACT",
+        "MULTIPLY",
+        "DIVIDE",
+        "REMAINDER",
+        "ROUNDED",
+        "END-PERFORM",
+        "END-EVALUATE",
+        "EVALUATE",
+        "WHEN",
+        "CONTINUE",
+        "INITIALIZE",
+        "STRING",
+        "UNSTRING",
+        "SEARCH",
+        "GO",
+        "GOTO",
+        "REWRITE",
+        "DELETE",
+        "START",
+        "RELEASE",
+        "EXIT",
+        "TRAILING",
+        "LEADING",
+        "THRU",
+        "THROUGH",
+        "DELIMITED",
+        "POINTER",
     ])
 });
+
+pub fn is_statement_verb(tok: &str) -> bool {
+    matches!(
+        tok.to_uppercase().as_str(),
+        "MOVE"
+            | "PERFORM"
+            | "READ"
+            | "WRITE"
+            | "DISPLAY"
+            | "IF"
+            | "ELSE"
+            | "END-IF"
+            | "STOP"
+            | "CALL"
+            | "EXEC"
+            | "OPEN"
+            | "CLOSE"
+            | "FETCH"
+            | "COMPUTE"
+            | "SET"
+            | "ADD"
+            | "SUBTRACT"
+            | "MULTIPLY"
+            | "DIVIDE"
+            | "ACCEPT"
+            | "INSPECT"
+            | "INITIALIZE"
+            | "STRING"
+            | "UNSTRING"
+            | "SEARCH"
+            | "SORT"
+            | "MERGE"
+            | "GOBACK"
+            | "EXIT"
+            | "EVALUATE"
+            | "CONTINUE"
+            | "GO"
+            | "GOTO"
+            | "REWRITE"
+            | "DELETE"
+            | "START"
+            | "RELEASE"
+            | "RETURN"
+            | "END-PERFORM"
+            | "END-EVALUATE"
+            | "END-READ"
+            | "END-SEARCH"
+            | "END-STRING"
+            | "END-UNSTRING"
+    )
+}
 
 pub static LITERALS: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     HashMap::from([

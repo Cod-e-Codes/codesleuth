@@ -54,7 +54,6 @@ cargo run --bin gen_dummy -- --count 1000 --outdir dummy-cobol
 The parser is not a complete COBOL implementation.
 
 - COPY looks up members next to the source and in `COPYBOOK`, `COPYLIB`, or `copybooks` directories walking up from the file. It does not search a z/OS library (SYSLIB, `COPY` ... `OF` / `IN`). If the member is not found, COPY remains a copybook data item.
-- Column-7 `*` lines in IDENTIFICATION are stored as comments. A leading `*` is stripped only when it is the first character of the line, so banners such as `*-----------------------` appear in the report.
 - Not a Db2 coprocessor: no DBRM, no generated SQLCA. DATA DIVISION DECLARE TABLE, DECLARE CURSOR, and INCLUDE when the member is missing are not data items.
 - `--workers` isolates unwinding panics per file (`catch_unwind`). The process still exits if Rust is built with `panic = "abort"`, on a double panic, or on some stack overflows.
 

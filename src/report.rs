@@ -1,9 +1,7 @@
 //! COBOL IR to Markdown.
 use crate::cobol;
 use crate::error::Error;
-use crate::ir::{
-    CallGraphEntry, ControlFlowEdge, DataItem, Paragraph, Statement, VariableUsage, IR,
-};
+use crate::ir::{CallGraphEntry, ControlFlowEdge, DataItem, Statement, VariableUsage, IR};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
@@ -56,7 +54,6 @@ fn print_data_items<W: Write>(
         let occurs = item.occurs;
         let redefines = item.redefines.as_deref().unwrap_or("");
         let value = item.value.as_deref();
-        let comp3 = item.comp3;
         let section = item.section.as_deref().unwrap_or("");
         let array_str = if let Some(occ) = occurs {
             format!(" [OCCURS {}]", occ)
@@ -73,11 +70,7 @@ fn print_data_items<W: Write>(
             meta.push(format!("PIC {}", pic));
         }
         if !typ.is_empty() {
-            if comp3 {
-                meta.push(format!("TYPE packed-decimal (COMP-3) [{}]", typ));
-            } else {
-                meta.push(format!("TYPE {}", typ));
-            }
+            meta.push(format!("TYPE {}", typ));
         }
         let formatted = cobol::format_value(value);
         if !formatted.is_empty() {
@@ -261,10 +254,23 @@ fn write_statement<W: Write>(out: &mut W, stmt: &Statement) -> io::Result<()> {
     } else {
         String::new()
     };
-    let operands_info = if !operands.is_empty() {
-        format!(" [{}]", operands.join(", "))
-    } else {
-        String::new()
+    let operands_info = {
+        let filtered: Vec<&String> = operands
+            .iter()
+            .filter(|op| cobol::is_valid_identifier(op) && !cobol::is_literal(op))
+            .collect();
+        if filtered.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " [{}]",
+                filtered
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
     };
     writeln!(
         out,
@@ -284,7 +290,6 @@ fn print_unused_paragraphs<W: Write>(
     out: &mut W,
     all_paragraphs: &[(String, String, Option<usize>)],
     call_graph: &[CallGraphEntry],
-    paragraphs: &[Paragraph],
 ) -> io::Result<()> {
     let mut called = HashSet::new();
     for edge in call_graph {
@@ -293,15 +298,11 @@ fn print_unused_paragraphs<W: Write>(
         }
     }
     let mut used = HashSet::new();
-    if !all_paragraphs.is_empty() {
-        used.insert(all_paragraphs[0].0.to_uppercase());
-        for i in 0..paragraphs.len().saturating_sub(1) {
-            let current_name = &paragraphs[i].name;
-            let next_name = &paragraphs[i + 1].name;
-            if !current_name.is_empty() && !next_name.is_empty() {
-                called.insert(next_name.to_uppercase());
-            }
-        }
+    if let Some((pname, _, _)) = all_paragraphs
+        .iter()
+        .min_by_key(|(_, _, line)| line.unwrap_or(usize::MAX))
+    {
+        used.insert(pname.to_uppercase());
     }
     let mut unused_counter = HashMap::new();
     for para in all_paragraphs {
@@ -311,38 +312,37 @@ fn print_unused_paragraphs<W: Write>(
             *unused_counter.entry(key).or_insert(0) += 1;
         }
     }
+    if unused_counter.is_empty() {
+        return Ok(());
+    }
     writeln!(out, "\n## Unused Paragraphs\n")?;
-    if !unused_counter.is_empty() {
+    writeln!(
+        out,
+        "**The following paragraphs are not the target of any PERFORM or GOTO:**\n"
+    )?;
+    let mut sorted_unused: Vec<_> = unused_counter.iter().collect();
+    sorted_unused.sort_by_key(|((pname, section, line), _)| (pname, section, line));
+    for ((pname, section, line), count) in sorted_unused {
+        let section_info = if !section.is_empty() {
+            format!(" _(Section: {})_", section)
+        } else {
+            String::new()
+        };
+        let line_info = if let Some(l) = line {
+            format!(" _(line {})_", l)
+        } else {
+            String::new()
+        };
+        let count_info = if *count > 1 {
+            format!(" _(x{})_", count)
+        } else {
+            String::new()
+        };
         writeln!(
             out,
-            "**The following paragraphs are not the target of any PERFORM or GOTO:**\n"
+            "- **{}**{}{}{}",
+            pname, section_info, line_info, count_info
         )?;
-        let mut sorted_unused: Vec<_> = unused_counter.iter().collect();
-        sorted_unused.sort_by_key(|((pname, section, line), _)| (pname, section, line));
-        for ((pname, section, line), count) in sorted_unused {
-            let section_info = if !section.is_empty() {
-                format!(" _(Section: {})_", section)
-            } else {
-                String::new()
-            };
-            let line_info = if let Some(l) = line {
-                format!(" _(line {})_", l)
-            } else {
-                String::new()
-            };
-            let count_info = if *count > 1 {
-                format!(" _(x{})_", count)
-            } else {
-                String::new()
-            };
-            writeln!(
-                out,
-                "- **{}**{}{}{}",
-                pname, section_info, line_info, count_info
-            )?;
-        }
-    } else {
-        writeln!(out, "_No unused paragraphs found._")?;
     }
     writeln!(out, "\n---\n")?;
     Ok(())
@@ -376,14 +376,8 @@ fn print_external_calls<W: Write>(out: &mut W, call_graph: &[CallGraphEntry]) ->
     Ok(())
 }
 
-fn sanitize_node_id(name: &str) -> String {
-    if name.is_empty() {
-        return "UNKNOWN".to_string();
-    }
-    let parts: Vec<&str> = name.split(':').collect();
-    let para_name = parts[0].chars().take(20).collect::<String>();
-    let mut sanitized = para_name
-        .chars()
+fn sanitize_node_part(part: &str) -> String {
+    part.chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '_' {
                 c
@@ -391,20 +385,21 @@ fn sanitize_node_id(name: &str) -> String {
                 '_'
             }
         })
-        .collect::<String>();
+        .collect()
+}
+
+fn sanitize_node_id(name: &str) -> String {
+    if name.is_empty() {
+        return "UNKNOWN".to_string();
+    }
+    let parts: Vec<&str> = name.splitn(2, ':').collect();
+    let mut sanitized = sanitize_node_part(parts[0]);
+    if sanitized.is_empty() {
+        sanitized = "UNKNOWN".to_string();
+    }
     if parts.len() > 1 {
-        let stmt_part = parts[1].chars().take(20).collect::<String>();
-        let sanitized_stmt = stmt_part
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        sanitized.push_str(&format!("_{}", sanitized_stmt));
+        sanitized.push('_');
+        sanitized.push_str(&sanitize_node_part(parts[1]));
     }
     if sanitized.chars().next().is_some_and(|c| c.is_numeric()) {
         sanitized.insert(0, '_');
@@ -579,7 +574,7 @@ pub fn render(ir: &IR, verbose: bool, debug: bool) -> Result<String, Error> {
     print_control_flow_graph(&mut output, &ir.control_flow_graph)
         .map_err(|e| Error::Report(e.to_string()))?;
     print_io_files(&mut output, ir).map_err(|e| Error::Report(e.to_string()))?;
-    print_unused_paragraphs(&mut output, &all_paragraphs, &ir.call_graph, &ir.paragraphs)
+    print_unused_paragraphs(&mut output, &all_paragraphs, &ir.call_graph)
         .map_err(|e| Error::Report(e.to_string()))?;
     print_external_calls(&mut output, &ir.call_graph).map_err(|e| Error::Report(e.to_string()))?;
     print_nested_programs(&mut output, &ir.nested_programs)

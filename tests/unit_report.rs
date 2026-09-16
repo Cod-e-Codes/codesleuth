@@ -93,4 +93,6 @@ fn empty_file_and_io_omit_headings() {
     assert!(!md.contains("## Call Graph"));
     assert!(!md.contains("No call graph data"));
     assert!(!md.contains("## Control Flow Graph"));
+    assert!(!md.contains("## Unused Paragraphs"));
+    assert!(!md.contains("_No unused paragraphs found._"));
 }

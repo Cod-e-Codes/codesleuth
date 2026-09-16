@@ -86,6 +86,7 @@ fn hello_display_and_goback() {
     assert!(!md.contains("## Working-Storage Variables"));
     assert!(!md.contains("## Call Graph"));
     assert!(!md.contains("No call graph data"));
+    assert!(!md.contains("## Unused Paragraphs"));
 }
 
 #[test]
@@ -137,7 +138,9 @@ fn pic_comp3_value_and_continuation() {
     assert!(ir.contains("+0"));
     assert!(ir.contains("ERR-MSG-DATA1"));
     assert!(md.contains("NUM-TRAN-RECS"));
-    assert!(md.contains("COMP-3"));
+    assert!(md.contains("TYPE packed-decimal (COMP-3)"));
+    assert!(!md.contains("[packed-decimal"));
+    assert!(!md.contains("TYPE packed-decimal (COMP-3) [packed-decimal (COMP-3)]"));
 }
 
 #[test]
@@ -176,6 +179,8 @@ fn file_section_fd_and_picture() {
     assert!(md.contains("PRINT-REC"));
     assert!(!md.contains("No File Section entries found"));
     assert!(md.contains("PRINT-LINE"));
+    assert!(md.contains("TYPE numeric"));
+    assert!(!md.contains("TYPE float"));
 }
 
 #[test]
@@ -685,4 +690,203 @@ fn exec_sql_declare_in_working_storage_is_not_a_data_item() {
         .collect();
     assert_eq!(stmts.len(), 1, "{stmts:?}");
     assert!(stmts[0].operands[0].to_uppercase().contains("OPEN"));
+}
+
+fn all_statements(ir: &IR) -> Vec<&codesleuth::ir::Statement> {
+    ir.procedure_division
+        .sections
+        .iter()
+        .flat_map(|s| s.paragraphs.iter())
+        .flat_map(|p| p.statements.iter())
+        .collect()
+}
+
+#[test]
+fn add_giving_is_one_statement() {
+    let ir = parse_ir(
+        "addamt_giving.cob",
+        r#"
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ADDAMT.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  AMT1-IN PIC 9(5).
+       01  AMT2-IN PIC 9(5).
+       01  AMT3-IN PIC 9(5).
+       01  TOTAL-OUT PIC 9(6).
+       PROCEDURE DIVISION.
+       100-MAIN.
+           ADD AMT1-IN AMT2-IN AMT3-IN
+               GIVING TOTAL-OUT
+           GOBACK.
+"#,
+    );
+    let adds: Vec<_> = all_statements(&ir)
+        .into_iter()
+        .filter(|s| s.r#type == "ADD")
+        .collect();
+    assert_eq!(adds.len(), 1, "{:?}", adds);
+    let raw = adds[0].raw.to_uppercase();
+    assert!(raw.contains("AMT1-IN"), "{}", adds[0].raw);
+    assert!(raw.contains("GIVING"), "{}", adds[0].raw);
+    assert!(raw.contains("TOTAL-OUT"), "{}", adds[0].raw);
+    assert!(
+        !all_statements(&ir).iter().any(|s| s.r#type == "GIVING"),
+        "{:?}",
+        all_statements(&ir)
+            .iter()
+            .map(|s| &s.r#type)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cobol_words_are_not_variables() {
+    let (_ir, md) = parse_md(
+        "keywords.cob",
+        r#"
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. KEYS.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  AMT1 PIC 9(5).
+       01  TOTAL-OUT PIC 9(6).
+       01  WS-A PIC X.
+       01  WS-B PIC X.
+       01  PRINT-REC PIC X(80).
+       PROCEDURE DIVISION.
+       100-MAIN.
+           ADD AMT1 GIVING TOTAL-OUT
+           INSPECT WS-A CONVERTING 'A' TO 'B'
+           PERFORM 100-MAIN 2 TIMES
+           WRITE PRINT-REC AFTER ADVANCING 2 LINES
+           GOBACK.
+"#,
+    );
+    let upper = md.to_uppercase();
+    assert!(!upper.contains("| **GIVING**"), "{md}");
+    assert!(!upper.contains("| **CONVERTING**"), "{md}");
+    assert!(!upper.contains("| **TIMES**"), "{md}");
+    assert!(!upper.contains("| **LINES**"), "{md}");
+    assert!(!md.contains("[AMT1, GIVING, TOTAL-OUT]"), "{md}");
+    assert!(
+        !md.contains("[PRINT-REC, AFTER, ADVANCING, 2, LINES]"),
+        "{md}"
+    );
+    assert!(md.contains("[AMT1, TOTAL-OUT]"), "{md}");
+    assert!(md.contains("[PRINT-REC]"), "{md}");
+}
+
+#[test]
+fn pic_v_and_edited_are_numeric() {
+    let ir = parse_ir(
+        "picnum.cob",
+        r#"
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PICNUM.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  WS-CUST-ACCT-BALANCE PIC 9(7)V99.
+       01  ACCT-LIMIT-O PIC $$,$$$,$$9.99.
+       01  WS-FRAC PIC V99.
+       PROCEDURE DIVISION.
+           GOBACK.
+"#,
+    );
+    let items = &ir.data_division.working_storage;
+    for name in ["WS-CUST-ACCT-BALANCE", "ACCT-LIMIT-O", "WS-FRAC"] {
+        let item = items.iter().find(|i| i.name == name).unwrap();
+        assert_eq!(item.r#type.as_deref(), Some("numeric"), "{name} {item:?}");
+    }
+    let md = report::render(&ir, false, false).unwrap();
+    assert!(!md.contains("TYPE float"), "{md}");
+}
+
+#[test]
+fn unused_paragraph_without_perform_is_listed() {
+    let (_ir, md) = parse_md(
+        "unused.cob",
+        r#"
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. UNUSED.
+       PROCEDURE DIVISION.
+       100-MAIN.
+           DISPLAY 'MAIN'.
+           GOBACK.
+       200-DEAD.
+           DISPLAY 'DEAD'.
+           GOBACK.
+"#,
+    );
+    assert!(md.contains("## Unused Paragraphs"), "{md}");
+    assert!(md.contains("**200-DEAD**"), "{md}");
+    assert!(!md.contains("_No unused paragraphs found._"), "{md}");
+}
+
+#[test]
+fn mermaid_node_ids_unique_for_long_displays() {
+    let (_ir, md) = parse_md(
+        "addamt_disp.cob",
+        r#"
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. ADDAMT.
+       PROCEDURE DIVISION.
+       100-MAIN.
+           DISPLAY "Enter amount of first purchase  (5 digits)"
+           DISPLAY "Enter amount of second purchase (5 digits)"
+           DISPLAY "Enter amount of third purchase  (5 digits)"
+           GOBACK.
+"#,
+    );
+    let start = md.find("flowchart TD").expect(&md);
+    let end = md[start..].find("```").expect(&md[start..]);
+    let graph = &md[start..start + end];
+    let mut ids = Vec::new();
+    for token in graph.split_whitespace() {
+        if token.starts_with("_100_MAIN_DISPLAY") {
+            ids.push(token.to_string());
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 3, "{ids:?}\n{graph}");
+}
+
+#[test]
+fn identification_banners_omitted_prose_kept() {
+    let ir = parse_ir(
+        "banners.cob",
+        r#"
+       IDENTIFICATION DIVISION.
+      *-----------------------
+      * Copyright IBM
+      *-----------------------
+      *
+      *******************************************************
+      * Accepts 3 amounts and adds them.
+       PROGRAM-ID. ADDAMT.
+       PROCEDURE DIVISION.
+           GOBACK.
+"#,
+    );
+    let comments = &ir.identification_division.comments;
+    assert!(
+        comments.iter().any(|c| c.contains("Copyright IBM")),
+        "{comments:?}"
+    );
+    assert!(
+        comments
+            .iter()
+            .any(|c| c.contains("Accepts 3 amounts and adds them.")),
+        "{comments:?}"
+    );
+    assert!(
+        !comments.iter().any(|c| {
+            let t = c.trim_start_matches('*').trim();
+            t.is_empty()
+                || t.chars()
+                    .all(|ch| matches!(ch, '-' | '=' | '+' | '*' | '.' | '_' | ' '))
+        }),
+        "{comments:?}"
+    );
 }
