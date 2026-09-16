@@ -5,7 +5,7 @@ use clap::{Parser as ClapParser, Subcommand};
 use std::io::{self, Read};
 
 #[derive(ClapParser)]
-#[command(author, version, about = "CodeSleuth: Unified COBOL parser and summarizer")]
+#[command(author, version, about = "COBOL parser and summarizer")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -58,14 +58,23 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Parse { input, verbose, debug } => {
+        Commands::Parse {
+            input,
+            verbose,
+            debug,
+        } => {
             let ir = parser::parse_cobol_file(&input, verbose, debug).unwrap_or_else(|e| {
                 eprintln!("[ERROR] {}", e);
                 std::process::exit(1);
             });
             println!("{}", ir);
         }
-        Commands::Summarize { input, output, verbose, debug } => {
+        Commands::Summarize {
+            input,
+            output,
+            verbose,
+            debug,
+        } => {
             let mut ir_json = String::new();
             if let Some(input_path) = input {
                 ir_json = std::fs::read_to_string(input_path).unwrap_or_else(|e| {
@@ -85,7 +94,12 @@ fn main() {
                 print!("{}", md);
             }
         }
-        Commands::Analyze { input, output, verbose, debug } => {
+        Commands::Analyze {
+            input,
+            output,
+            verbose,
+            debug,
+        } => {
             let ir = parser::parse_cobol_file(&input, verbose, debug).unwrap_or_else(|e| {
                 eprintln!("[ERROR] {}", e);
                 std::process::exit(1);

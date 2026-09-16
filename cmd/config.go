@@ -10,28 +10,26 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config holds CLI and path configuration
-// Implements config file and CLI flag parsing, with path normalization
-
 type Config struct {
 	RustBackendPath string
 	InputDir        string
 	OutputDir       string
 }
 
-// AddConfigFlags adds config-related flags to the CLI
-func AddConfigFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().String("rust-backend", "", "Path to the Rust backend binary (codesleuth.exe)")
-	cmd.PersistentFlags().String("input", "", "Input directory or file to analyze")
-	cmd.PersistentFlags().String("output", "", "Output directory for reports (default: stdout)")
-	cmd.PersistentFlags().String("config", "", "Path to config file (YAML or JSON)")
-	viper.BindPFlag("rust-backend", cmd.PersistentFlags().Lookup("rust-backend"))
-	viper.BindPFlag("input", cmd.PersistentFlags().Lookup("input"))
-	viper.BindPFlag("output", cmd.PersistentFlags().Lookup("output"))
-	viper.BindPFlag("config", cmd.PersistentFlags().Lookup("config"))
+func AddConfigFlags(cmd *cobra.Command) error {
+	flags := cmd.PersistentFlags()
+	flags.String("rust-backend", "", "Path to the Rust backend binary")
+	flags.String("input", "", "Input directory or file")
+	flags.String("output", "", "Directory for Markdown reports (default: stdout)")
+	flags.String("config", "", "Config file (YAML or JSON)")
+	for _, name := range []string{"rust-backend", "input", "output", "config"} {
+		if err := viper.BindPFlag(name, flags.Lookup(name)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// LoadConfig loads config from file and CLI flags, normalizes paths
 func LoadConfig() (Config, error) {
 	cfgFile := viper.GetString("config")
 	if cfgFile != "" {
@@ -40,14 +38,9 @@ func LoadConfig() (Config, error) {
 			return Config{}, fmt.Errorf("failed to read config file: %v", err)
 		}
 	}
-	// Merge CLI flags (override config file)
-	rustBackend := viper.GetString("rust-backend")
-	inputDir := viper.GetString("input")
-	outputDir := viper.GetString("output")
-	// Normalize paths (cross-platform)
-	rustBackend = normalizePath(rustBackend)
-	inputDir = normalizePath(inputDir)
-	outputDir = normalizePath(outputDir)
+	rustBackend := normalizePath(viper.GetString("rust-backend"))
+	inputDir := normalizePath(viper.GetString("input"))
+	outputDir := normalizePath(viper.GetString("output"))
 	return Config{
 		RustBackendPath: rustBackend,
 		InputDir:        inputDir,
@@ -61,7 +54,10 @@ func normalizePath(p string) string {
 	}
 	p = filepath.Clean(p)
 	if !filepath.IsAbs(p) {
-		cwd, _ := os.Getwd()
+		cwd, err := os.Getwd()
+		if err != nil {
+			return filepath.FromSlash(strings.ReplaceAll(p, "\\", "/"))
+		}
 		p = filepath.Join(cwd, p)
 	}
 	return filepath.FromSlash(strings.ReplaceAll(p, "\\", "/"))

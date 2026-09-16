@@ -1,8 +1,8 @@
-use std::fs::File;
-use std::io::{Write, Read};
-use std::env;
 use codesleuth::parser;
 use codesleuth::summarizer;
+use std::env;
+use std::fs::File;
+use std::io::Write;
 
 #[test]
 fn test_integration() {
@@ -21,4 +21,4 @@ fn test_integration() {
     assert!(md.contains("INTEGTEST"));
     assert!(md.contains("COBOL Program Summary"));
     std::fs::remove_file(tmp_path).unwrap();
-} 
+}

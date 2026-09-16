@@ -1,22 +1,61 @@
-//! COBOL summarizer logic migrated from summarizer/src/main.rs
+//! COBOL IR summarizer.
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
-use regex::Regex;
-use once_cell::sync::Lazy;
-use rayon::prelude::*;
 
 static COBOL_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    [
-        "MOVE", "PERFORM", "READ", "WRITE", "DISPLAY", "IF", "ELSE", "END-IF", "UNTIL", "AT", "END", "STOP",
-        "CALL", "EXEC", "SQL", "OPEN", "CLOSE", "FETCH", "COMPUTE", "SET", "IS", "NOT", "EQUAL", "THEN",
-        "USING", "FROM", "BY", "TO", "VARYING", "AND", "OR", ">", "<", "=", ".", "(", ")", "FUNCTION",
-        "INTO", "AFTER", "ADVANCING", "USING", "END-EXEC", "RETURN", "RUN"
-    ].iter().cloned().collect()
+    HashSet::from([
+        "MOVE",
+        "PERFORM",
+        "READ",
+        "WRITE",
+        "DISPLAY",
+        "IF",
+        "ELSE",
+        "END-IF",
+        "UNTIL",
+        "AT",
+        "END",
+        "STOP",
+        "CALL",
+        "EXEC",
+        "SQL",
+        "OPEN",
+        "CLOSE",
+        "FETCH",
+        "COMPUTE",
+        "SET",
+        "IS",
+        "NOT",
+        "EQUAL",
+        "THEN",
+        "USING",
+        "FROM",
+        "BY",
+        "TO",
+        "VARYING",
+        "AND",
+        "OR",
+        ">",
+        "<",
+        "=",
+        ".",
+        "(",
+        ")",
+        "FUNCTION",
+        "INTO",
+        "AFTER",
+        "ADVANCING",
+        "END-EXEC",
+        "RETURN",
+        "RUN",
+    ])
 });
 
 static COBOL_LITERALS: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
-    [
+    HashMap::from([
         ("SPACES", "\"  \" (SPACES)"),
         ("SPACE", "\" \" (SPACE)"),
         ("ZERO", "0 (ZERO)"),
@@ -27,7 +66,7 @@ static COBOL_LITERALS: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| 
         ("QUOTE", "\" (QUOTE)"),
         ("QUOTES", "\" (QUOTES)"),
         ("NULL", "0 (NULL)"),
-    ].iter().cloned().collect()
+    ])
 });
 
 #[derive(Debug, Deserialize)]
@@ -78,8 +117,15 @@ struct DataDivision {
 #[derive(Debug, Deserialize, Clone)]
 struct DataItem {
     name: Option<serde_json::Value>,
+    #[serde(rename = "type")]
+    item_type: Option<serde_json::Value>,
     level: Option<u32>,
-    // Used for recursive printing of nested data items
+    picture: Option<serde_json::Value>,
+    value: Option<serde_json::Value>,
+    occurs: Option<u32>,
+    redefines: Option<serde_json::Value>,
+    comp3: Option<bool>,
+    section: Option<serde_json::Value>,
     children: Option<Vec<DataItem>>,
 }
 
@@ -142,7 +188,12 @@ struct ProcedureSection {
 }
 
 fn is_valid_identifier(name: &str) -> bool {
-    let name = name.trim().trim_end_matches('.').trim_matches('"').trim_matches('\'').to_uppercase();
+    let name = name
+        .trim()
+        .trim_end_matches('.')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_uppercase();
     if name.is_empty() {
         return false;
     }
@@ -186,14 +237,52 @@ fn get_str(val: &Option<serde_json::Value>) -> &str {
     }
 }
 
+fn format_value(val: &Option<serde_json::Value>) -> String {
+    if let Some(v) = val {
+        match v {
+            serde_json::Value::String(s) => {
+                let v_str = s.trim_matches('"').to_uppercase();
+                if let Some(literal) = COBOL_LITERALS.get(v_str.as_str()) {
+                    return literal.to_string();
+                }
+                if v_str.starts_with('\'') && v_str.ends_with('\'') {
+                    return format!("\"{}\"", v_str.trim_matches('\''));
+                }
+                if v_str.starts_with('"') && v_str.ends_with('"') {
+                    return v_str.to_string();
+                }
+                return v_str;
+            }
+            _ => return v.to_string(),
+        }
+    }
+    String::new()
+}
+
 fn print_program_info<W: Write>(out: &mut W, ir: &IR) -> io::Result<()> {
     writeln!(out, "# COBOL Program Summary\n")?;
-    writeln!(out, "**Program Name:** {}", ir.program_name.as_deref().unwrap_or("UNKNOWN"))?;
-    writeln!(out, "**Source File:** {}", ir.source_file.as_deref().unwrap_or("UNKNOWN"))?;
+    writeln!(
+        out,
+        "**Program Name:** {}",
+        ir.program_name.as_deref().unwrap_or("UNKNOWN")
+    )?;
+    writeln!(
+        out,
+        "**Source File:** {}",
+        ir.source_file.as_deref().unwrap_or("UNKNOWN")
+    )?;
 
     if let Some(id) = &ir.identification_division {
-        writeln!(out, "**Author:** {}", id.author.as_deref().unwrap_or("UNKNOWN"))?;
-        writeln!(out, "**Date Written:** {}", id.date_written.as_deref().unwrap_or("UNKNOWN"))?;
+        writeln!(
+            out,
+            "**Author:** {}",
+            id.author.as_deref().unwrap_or("UNKNOWN")
+        )?;
+        writeln!(
+            out,
+            "**Date Written:** {}",
+            id.date_written.as_deref().unwrap_or("UNKNOWN")
+        )?;
         writeln!(out, "**Comments:**")?;
         if let Some(comments) = &id.comments {
             for comment in comments {
@@ -209,14 +298,84 @@ fn print_program_info<W: Write>(out: &mut W, ir: &IR) -> io::Result<()> {
     Ok(())
 }
 
-fn print_data_items<W: Write>(out: &mut W, items: &[DataItem], indent: usize, show_section: bool) -> io::Result<()> {
-    let formatted: Vec<_> = items.par_iter().map(|item| {
-        let mut buf = Vec::new();
-        let _ = print_data_items(&mut buf, std::slice::from_ref(item), indent, show_section);
-        buf
-    }).collect();
-    for buf in formatted {
-        out.write_all(&buf)?;
+fn print_data_items<W: Write>(
+    out: &mut W,
+    items: &[DataItem],
+    indent: usize,
+    show_section: bool,
+) -> io::Result<()> {
+    let mut i = 0;
+    while i < items.len() {
+        if get_str(&items[i].name).to_uppercase() == "FILLER" {
+            let mut count = 1;
+            let mut j = i + 1;
+            while j < items.len() && get_str(&items[j].name).to_uppercase() == "FILLER" {
+                count += 1;
+                j += 1;
+            }
+            if count > 1 {
+                writeln!(out, "{}  - FILLER ({} items)", "  ".repeat(indent), count)?;
+            } else {
+                writeln!(out, "{}  - FILLER (ignored)", "  ".repeat(indent))?;
+            }
+            i += count;
+            continue;
+        }
+        let item = &items[i];
+        let prefix = "  ".repeat(indent);
+        let name = get_str(&item.name);
+        let level = item.level.unwrap_or(0);
+        let pic = get_str(&item.picture);
+        let typ = get_str(&item.item_type);
+        let occurs = item.occurs;
+        let redefines = get_str(&item.redefines);
+        let value = &item.value;
+        let comp3 = item.comp3.unwrap_or(false);
+        let section = get_str(&item.section);
+        let array_str = if let Some(occ) = occurs {
+            format!(" [OCCURS {}]", occ)
+        } else {
+            String::new()
+        };
+        let redef_str = if !redefines.is_empty() {
+            format!(" [REDEFINES {}]", redefines)
+        } else {
+            String::new()
+        };
+        let mut meta = Vec::new();
+        if !pic.is_empty() {
+            meta.push(format!("PIC {}", pic));
+        }
+        if !typ.is_empty() {
+            if comp3 {
+                meta.push(format!("TYPE packed-decimal (COMP-3) [{}]", typ));
+            } else {
+                meta.push(format!("TYPE {}", typ));
+            }
+        }
+        if let Some(val) = value {
+            let formatted = format_value(&Some(val.clone()));
+            if !formatted.is_empty() {
+                meta.push(format!("VALUE {}", formatted));
+            }
+        }
+        if show_section && !section.is_empty() {
+            meta.push(format!("SECTION {}", section));
+        }
+        let meta_str = if meta.is_empty() {
+            String::new()
+        } else {
+            format!(" - {}", meta.join("; "))
+        };
+        writeln!(
+            out,
+            "{}  - **{}** (Level {}){}{}{}",
+            prefix, name, level, array_str, redef_str, meta_str
+        )?;
+        if let Some(children) = &item.children {
+            print_data_items(out, children, indent + 1, show_section)?;
+        }
+        i += 1;
     }
     Ok(())
 }
@@ -226,20 +385,27 @@ fn print_working_storage<W: Write>(out: &mut W, ws_vars: &Option<Vec<DataItem>>)
     if let Some(vars) = ws_vars {
         for item in vars {
             if !get_str(&item.name).is_empty() {
-                print_data_items(out, &[item.clone()], 0, false)?;
+                print_data_items(out, std::slice::from_ref(item), 0, false)?;
             }
         }
     } else {
-        writeln!(out, "_Declared, but no user-defined items were found (possibly all are imported)._")?;
+        writeln!(
+            out,
+            "_Declared, but no user-defined items were found (possibly all are imported)._"
+        )?;
     }
     writeln!(out, "\n---\n")?;
     Ok(())
 }
 
-fn print_file_section<W: Write>(out: &mut W, file_sections: &Option<Vec<DataItem>>) -> io::Result<()> {
+fn print_file_section<W: Write>(
+    out: &mut W,
+    file_sections: &Option<Vec<DataItem>>,
+) -> io::Result<()> {
     writeln!(out, "\n## File Section\n")?;
     if let Some(sections) = file_sections {
-        let level_1_items: Vec<DataItem> = sections.iter()
+        let level_1_items: Vec<DataItem> = sections
+            .iter()
             .filter(|item| item.level == Some(1))
             .cloned()
             .collect();
@@ -255,7 +421,11 @@ fn print_file_section<W: Write>(out: &mut W, file_sections: &Option<Vec<DataItem
     Ok(())
 }
 
-fn print_procedure_division<W: Write>(out: &mut W, ir: &IR, all_paragraphs_out: &mut Vec<(String, String, Option<u32>)>) -> io::Result<()> {
+fn print_procedure_division<W: Write>(
+    out: &mut W,
+    ir: &IR,
+    all_paragraphs_out: &mut Vec<(String, String, Option<u32>)>,
+) -> io::Result<()> {
     let paragraphs = if let Some(pd) = &ir.procedure_division {
         if let Some(sections) = &pd.sections {
             let mut all_paras = Vec::new();
@@ -279,7 +449,8 @@ fn print_procedure_division<W: Write>(out: &mut W, ir: &IR, all_paragraphs_out: 
         }
         writeln!(out, "\n## Procedure Division\n")?;
         let mut para_map = HashMap::new();
-        let paragraph_names: HashSet<String> = paras.iter()
+        let paragraph_names: HashSet<String> = paras
+            .iter()
             .filter_map(|p| p.name.as_ref().map(|n| n.to_uppercase()))
             .collect();
         for para in paras {
@@ -302,7 +473,11 @@ fn print_procedure_division<W: Write>(out: &mut W, ir: &IR, all_paragraphs_out: 
             for vu in var_usage {
                 if let Some(name) = &vu.name {
                     let clean_name = name.trim().trim_end_matches('.');
-                    if !clean_name.is_empty() && is_valid_identifier(clean_name) && !is_literal(clean_name) && !paragraph_names.contains(&clean_name.to_uppercase()) {
+                    if !clean_name.is_empty()
+                        && is_valid_identifier(clean_name)
+                        && !is_literal(clean_name)
+                        && !paragraph_names.contains(&clean_name.to_uppercase())
+                    {
                         filtered_vars.push(vu.clone());
                     }
                 }
@@ -313,15 +488,31 @@ fn print_procedure_division<W: Write>(out: &mut W, ir: &IR, all_paragraphs_out: 
             if pname.ends_with("-END") && statements.is_empty() {
                 continue;
             }
-            let line_info = if let Some(l) = line { format!(" (line {})", l) } else { String::new() };
-            let src_info = if let Some(src) = &para.source_location { format!(" [{}]", src) } else { String::new() };
-            let section_info = if !section.is_empty() { format!(" _(Section: {})_", section) } else { String::new() };
-            let kind_info = if para.kind.as_deref().unwrap_or("paragraph") != "paragraph" { 
-                format!(" _({})_", para.kind.as_deref().unwrap_or("paragraph")) 
-            } else { 
-                String::new() 
+            let line_info = if let Some(l) = line {
+                format!(" (line {})", l)
+            } else {
+                String::new()
             };
-            writeln!(out, "#### Paragraph: **{}**{}{}{}{}", pname, line_info, src_info, section_info, kind_info)?;
+            let src_info = if let Some(src) = &para.source_location {
+                format!(" [{}]", src)
+            } else {
+                String::new()
+            };
+            let section_info = if !section.is_empty() {
+                format!(" _(Section: {})_", section)
+            } else {
+                String::new()
+            };
+            let kind_info = if para.kind.as_deref().unwrap_or("paragraph") != "paragraph" {
+                format!(" _({})_", para.kind.as_deref().unwrap_or("paragraph"))
+            } else {
+                String::new()
+            };
+            writeln!(
+                out,
+                "#### Paragraph: **{}**{}{}{}{}",
+                pname, line_info, src_info, section_info, kind_info
+            )?;
             if !statements.is_empty() {
                 for stmt in statements {
                     let stype = stmt.statement_type.as_deref().unwrap_or("");
@@ -330,10 +521,26 @@ fn print_procedure_division<W: Write>(out: &mut W, ir: &IR, all_paragraphs_out: 
                     let stmt_src = stmt.source_location.as_deref();
                     let empty_operands = Vec::new();
                     let operands = stmt.operands.as_ref().unwrap_or(&empty_operands);
-                    let stmt_info = if let Some(l) = stmt_line { format!(" (line {})", l) } else { String::new() };
-                    let stmt_src_info = if let Some(src) = stmt_src { format!(" [{}]", src) } else { String::new() };
-                    let operands_info = if !operands.is_empty() { format!(" [{}]", operands.join(", ")) } else { String::new() };
-                    writeln!(out, "- **{}**: {}{}{}{}", stype, raw, operands_info, stmt_info, stmt_src_info)?;
+                    let stmt_info = if let Some(l) = stmt_line {
+                        format!(" (line {})", l)
+                    } else {
+                        String::new()
+                    };
+                    let stmt_src_info = if let Some(src) = stmt_src {
+                        format!(" [{}]", src)
+                    } else {
+                        String::new()
+                    };
+                    let operands_info = if !operands.is_empty() {
+                        format!(" [{}]", operands.join(", "))
+                    } else {
+                        String::new()
+                    };
+                    writeln!(
+                        out,
+                        "- **{}**: {}{}{}{}",
+                        stype, raw, operands_info, stmt_info, stmt_src_info
+                    )?;
                 }
             } else {
                 writeln!(out, "_No logic here_")?;
@@ -343,9 +550,18 @@ fn print_procedure_division<W: Write>(out: &mut W, ir: &IR, all_paragraphs_out: 
                 writeln!(out, "| Name | Read | Written |")?;
                 writeln!(out, "|------|------|---------|")?;
                 for vu in &filtered_vars {
-                    let name = vu.name.as_deref().unwrap_or("").trim().trim_end_matches('.');
+                    let name = vu
+                        .name
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim()
+                        .trim_end_matches('.');
                     let read = if vu.read.unwrap_or(false) { "Yes" } else { "" };
-                    let written = if vu.written.unwrap_or(false) { "Yes" } else { "" };
+                    let written = if vu.written.unwrap_or(false) {
+                        "Yes"
+                    } else {
+                        ""
+                    };
                     writeln!(out, "| **{}** | {} | {} |", name, read, written)?;
                 }
             } else {
@@ -357,12 +573,19 @@ fn print_procedure_division<W: Write>(out: &mut W, ir: &IR, all_paragraphs_out: 
     Ok(())
 }
 
-fn print_unused_paragraphs<W: Write>(out: &mut W, all_paragraphs: &[(String, String, Option<u32>)], call_graph: &Option<Vec<CallEdge>>, paragraphs: &Option<Vec<Paragraph>>) -> io::Result<()> {
+fn print_unused_paragraphs<W: Write>(
+    out: &mut W,
+    all_paragraphs: &[(String, String, Option<u32>)],
+    call_graph: &Option<Vec<CallEdge>>,
+    paragraphs: &Option<Vec<Paragraph>>,
+) -> io::Result<()> {
     let mut called = HashSet::new();
     if let Some(cg) = call_graph {
         for edge in cg {
             if let Some(edge_type) = &edge.edge_type {
-                if ["PERFORM", "GOTO", "PERFORM VARYING"].contains(&edge_type.to_uppercase().as_str()) {
+                if ["PERFORM", "GOTO", "PERFORM VARYING"]
+                    .contains(&edge_type.to_uppercase().as_str())
+                {
                     if let Some(to) = &edge.to {
                         called.insert(to.to_uppercase());
                     }
@@ -395,14 +618,33 @@ fn print_unused_paragraphs<W: Write>(out: &mut W, all_paragraphs: &[(String, Str
     }
     if !unused_counter.is_empty() {
         writeln!(out, "\n## Unused Paragraphs\n")?;
-        writeln!(out, "**The following paragraphs are not the target of any PERFORM or GOTO:**\n")?;
+        writeln!(
+            out,
+            "**The following paragraphs are not the target of any PERFORM or GOTO:**\n"
+        )?;
         let mut sorted_unused: Vec<_> = unused_counter.iter().collect();
         sorted_unused.sort_by_key(|((pname, section, line), _)| (pname, section, line));
         for ((pname, section, line), count) in sorted_unused {
-            let section_info = if !section.is_empty() { format!(" _(Section: {})_", section) } else { String::new() };
-            let line_info = if let Some(l) = line { format!(" _(line {})_", l) } else { String::new() };
-            let count_info = if *count > 1 { format!(" _(x{})_", count) } else { String::new() };
-            writeln!(out, "- **{}**{}{}{}", pname, section_info, line_info, count_info)?;
+            let section_info = if !section.is_empty() {
+                format!(" _(Section: {})_", section)
+            } else {
+                String::new()
+            };
+            let line_info = if let Some(l) = line {
+                format!(" _(line {})_", l)
+            } else {
+                String::new()
+            };
+            let count_info = if *count > 1 {
+                format!(" _(x{})_", count)
+            } else {
+                String::new()
+            };
+            writeln!(
+                out,
+                "- **{}**{}{}{}",
+                pname, section_info, line_info, count_info
+            )?;
         }
     } else {
         writeln!(out, "\n## Unused Paragraphs\n")?;
@@ -412,7 +654,10 @@ fn print_unused_paragraphs<W: Write>(out: &mut W, all_paragraphs: &[(String, Str
     Ok(())
 }
 
-fn print_external_calls<W: Write>(out: &mut W, call_graph: &Option<Vec<CallEdge>>) -> io::Result<()> {
+fn print_external_calls<W: Write>(
+    out: &mut W,
+    call_graph: &Option<Vec<CallEdge>>,
+) -> io::Result<()> {
     let mut calls = HashMap::new();
     if let Some(cg) = call_graph {
         for edge in cg {
@@ -420,7 +665,10 @@ fn print_external_calls<W: Write>(out: &mut W, call_graph: &Option<Vec<CallEdge>
                 if edge_type.to_uppercase() == "CALL" {
                     if let Some(prog) = &edge.to {
                         if let Some(from_para) = &edge.from {
-                            calls.entry(prog.clone()).or_insert_with(Vec::new).push(from_para.clone());
+                            calls
+                                .entry(prog.clone())
+                                .or_insert_with(Vec::new)
+                                .push(from_para.clone());
                         }
                     }
                 }
@@ -430,7 +678,11 @@ fn print_external_calls<W: Write>(out: &mut W, call_graph: &Option<Vec<CallEdge>
     if !calls.is_empty() {
         writeln!(out, "\n## Subprograms / External Calls")?;
         for (prog, from_paras) in calls {
-            let mut callers: Vec<_> = from_paras.into_iter().collect::<HashSet<_>>().into_iter().collect();
+            let mut callers: Vec<_> = from_paras
+                .into_iter()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
             callers.sort();
             let callers_str = callers.join(", ");
             writeln!(out, "- Program `{}` (Called from: {})", prog, callers_str)?;
@@ -445,17 +697,31 @@ fn sanitize_node_id(name: &str) -> String {
     }
     let parts: Vec<&str> = name.split(':').collect();
     let para_name = parts[0].chars().take(20).collect::<String>();
-    let mut sanitized = para_name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+    let mut sanitized = para_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     if parts.len() > 1 {
         let stmt_part = parts[1].chars().take(20).collect::<String>();
-        let sanitized_stmt = stmt_part.chars()
-            .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        let sanitized_stmt = stmt_part
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect::<String>();
         sanitized.push_str(&format!("_{}", sanitized_stmt));
     }
-    if sanitized.chars().next().map_or(false, |c| c.is_numeric()) {
+    if sanitized.chars().next().is_some_and(|c| c.is_numeric()) {
         sanitized.insert(0, '_');
     }
     sanitized
@@ -475,7 +741,10 @@ fn print_call_graph<W: Write>(out: &mut W, call_graph: &Option<Vec<CallEdge>>) -
             return Ok(());
         }
         writeln!(out, "```mermaid")?;
-        writeln!(out, "%% Dotted lines: GOTO; Solid: PERFORM or sequence; Arrows: control flow")?;
+        writeln!(
+            out,
+            "%% Dotted lines: GOTO; Solid: PERFORM or sequence; Arrows: control flow"
+        )?;
         writeln!(out, "flowchart TD")?;
         let mut seen_edges = HashSet::new();
         for edge in cg {
@@ -500,40 +769,61 @@ fn print_call_graph<W: Write>(out: &mut W, call_graph: &Option<Vec<CallEdge>>) -
         }
         writeln!(out, "```")?;
         writeln!(out, "\n### Call Graph Table\n")?;
-        writeln!(out, "| **From** | **To** | **Type** | **Kind** | **Line** | **Section** | **Source** |")?;
+        writeln!(
+            out,
+            "| **From** | **To** | **Type** | **Kind** | **Line** | **Section** | **Source** |"
+        )?;
         writeln!(out, "|------|----|------|------|------|---------|--------|")?;
         for edge in cg {
-            writeln!(out, "| **{}** | **{}** | {} | {} | {} | {} | {} |", 
-                edge.from.as_deref().unwrap_or(""), 
-                edge.to.as_deref().unwrap_or(""), 
+            writeln!(
+                out,
+                "| **{}** | **{}** | {} | {} | {} | {} | {} |",
+                edge.from.as_deref().unwrap_or(""),
+                edge.to.as_deref().unwrap_or(""),
                 edge.edge_type.as_deref().unwrap_or(""),
                 edge.kind.as_deref().unwrap_or("edge"),
-                edge.line.map(|l| l.to_string()).unwrap_or_else(|| "".to_string()),
+                edge.line
+                    .map(|l| l.to_string())
+                    .unwrap_or_else(|| "".to_string()),
                 edge.section.as_deref().unwrap_or(""),
-                edge.source_location.as_deref().unwrap_or(""))?;
+                edge.source_location.as_deref().unwrap_or("")
+            )?;
         }
     }
     writeln!(out, "\n---\n")?;
     Ok(())
 }
 
-fn print_control_flow_graph<W: Write>(out: &mut W, cfg: &Option<Vec<ControlFlowEdge>>) -> io::Result<()> {
+fn print_control_flow_graph<W: Write>(
+    out: &mut W,
+    cfg: &Option<Vec<ControlFlowEdge>>,
+) -> io::Result<()> {
     writeln!(out, "\n## Control Flow Graph\n")?;
     writeln!(out, "> **Legend:** Solid -> NEXT, Dotted -.-> GOTO, Solid -> PERFORM, Dashed --|VARYING|--> PERFORM VARYING")?;
     if let Some(cfg_edges) = cfg {
         if cfg_edges.is_empty() {
-            writeln!(out, "\n_No control flow graph generated (missing or empty in IR)._")?;
+            writeln!(
+                out,
+                "\n_No control flow graph generated (missing or empty in IR)._"
+            )?;
             writeln!(out, "\n---\n")?;
             return Ok(());
         }
         writeln!(out, "```mermaid")?;
-        writeln!(out, "%% Dotted lines: GOTO; Solid: PERFORM or sequence; Arrows: control flow")?;
+        writeln!(
+            out,
+            "%% Dotted lines: GOTO; Solid: PERFORM or sequence; Arrows: control flow"
+        )?;
         writeln!(out, "flowchart TD")?;
         for edge in cfg_edges {
             let from_node = sanitize_node_id(edge.from.as_deref().unwrap_or(""));
             let to_node = sanitize_node_id(edge.to.as_deref().unwrap_or(""));
             let edge_type = edge.edge_type.as_deref().unwrap_or("").to_uppercase();
-            let label = if edge_type != "NEXT" { format!("|{}|", edge_type) } else { String::new() };
+            let label = if edge_type != "NEXT" {
+                format!("|{}|", edge_type)
+            } else {
+                String::new()
+            };
             match edge_type.as_str() {
                 "GOTO" => writeln!(out, "    {} -.-> {}", from_node, to_node)?,
                 "PERFORM VARYING" => writeln!(out, "    {} --|VARYING|--> {}", from_node, to_node)?,
@@ -545,10 +835,13 @@ fn print_control_flow_graph<W: Write>(out: &mut W, cfg: &Option<Vec<ControlFlowE
         writeln!(out, "| **From** | **To** | **Type** |")?;
         writeln!(out, "|------|----|------|")?;
         for edge in cfg_edges {
-            writeln!(out, "| **{}** | **{}** | {} |", 
-                edge.from.as_deref().unwrap_or(""), 
-                edge.to.as_deref().unwrap_or(""), 
-                edge.edge_type.as_deref().unwrap_or(""))?;
+            writeln!(
+                out,
+                "| **{}** | **{}** | {} |",
+                edge.from.as_deref().unwrap_or(""),
+                edge.to.as_deref().unwrap_or(""),
+                edge.edge_type.as_deref().unwrap_or("")
+            )?;
         }
     }
     writeln!(out, "\n---\n")?;
@@ -564,11 +857,14 @@ fn print_io_files<W: Write>(out: &mut W, ir: &IR) -> io::Result<()> {
                     writeln!(out, "| File Name | Type | Description | Record Structure |")?;
                     writeln!(out, "|-----------|------|-------------|------------------|")?;
                     for f in files {
-                        writeln!(out, "| {} | {} | {} | {} |", 
-                            f.name, 
-                            f.file_type, 
-                            f.description, 
-                            f.record_name.as_deref().unwrap_or(""))?;
+                        writeln!(
+                            out,
+                            "| {} | {} | {} | {} |",
+                            f.name,
+                            f.file_type,
+                            f.description,
+                            f.record_name.as_deref().unwrap_or("")
+                        )?;
                     }
                 } else {
                     writeln!(out, "\n_No Input/Output files found._")?;
@@ -592,7 +888,10 @@ pub fn summarize_ir(ir_json: &str, verbose: bool, debug: bool) -> Result<String,
     if debug {
         eprintln!("[DEBUG] IR: {:#?}", ir);
     } else if verbose {
-        eprintln!("[VERBOSE] Program name: {}", ir.program_name.as_deref().unwrap_or("UNKNOWN"));
+        eprintln!(
+            "[VERBOSE] Program name: {}",
+            ir.program_name.as_deref().unwrap_or("UNKNOWN")
+        );
     }
     print_program_info(&mut output, &ir).map_err(|e| e.to_string())?;
     if let Some(data_div) = &ir.data_division {
@@ -604,11 +903,8 @@ pub fn summarize_ir(ir_json: &str, verbose: bool, debug: bool) -> Result<String,
     print_call_graph(&mut output, &ir.call_graph).map_err(|e| e.to_string())?;
     print_control_flow_graph(&mut output, &ir.control_flow_graph).map_err(|e| e.to_string())?;
     print_io_files(&mut output, &ir).map_err(|e| e.to_string())?;
-    print_unused_paragraphs(&mut output, &all_paragraphs, &ir.call_graph, &ir.paragraphs).map_err(|e| e.to_string())?;
+    print_unused_paragraphs(&mut output, &all_paragraphs, &ir.call_graph, &ir.paragraphs)
+        .map_err(|e| e.to_string())?;
     print_external_calls(&mut output, &ir.call_graph).map_err(|e| e.to_string())?;
     String::from_utf8(output).map_err(|e| e.to_string())
 }
-
-// (All print_program_info, print_data_items, print_working_storage, print_file_section, print_procedure_division, print_unused_paragraphs, print_external_calls, sanitize_node_id, print_call_graph, print_control_flow_graph, print_io_files, exactly as in summarizer/src/main.rs)
-
-// ... (full implementations of all helper functions from summarizer/src/main.rs) ... 

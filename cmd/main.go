@@ -18,19 +18,22 @@ var workers int
 var benchmark bool
 
 func init() {
-	analyzeCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose output")
-	analyzeCmd.Flags().BoolVar(&debug, "debug", false, "Enable debug output")
-	analyzeCmd.Flags().IntVar(&workers, "workers", runtime.NumCPU(), "Number of concurrent workers (default: number of logical CPUs)")
-	analyzeCmd.Flags().BoolVar(&benchmark, "benchmark", false, "Enable benchmarking mode (measure throughput, resource usage, etc.)")
+	analyzeCmd.Flags().BoolVar(&verbose, "verbose", false, "Extra progress on stderr")
+	analyzeCmd.Flags().BoolVar(&debug, "debug", false, "Internal trace on stderr")
+	analyzeCmd.Flags().IntVar(&workers, "workers", runtime.NumCPU(), "Concurrent workers (default: logical CPUs)")
+	analyzeCmd.Flags().BoolVar(&benchmark, "benchmark", false, "Print wall-clock throughput after analysis")
 }
 
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "codesleuth",
-		Short: "CodeSleuth is a multi-language code intelligence CLI tool",
+		Short: "Analyze COBOL source files",
 	}
 
-	AddConfigFlags(rootCmd)
+	if err := AddConfigFlags(rootCmd); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	rootCmd.AddCommand(analyzeCmd)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -39,9 +42,62 @@ func main() {
 	}
 }
 
+func rustBackendName() string {
+	if runtime.GOOS == "windows" {
+		return "codesleuth.exe"
+	}
+	return "codesleuth"
+}
+
+func defaultRustBackend() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(exePath), "..", "codesleuth", "target", "release", rustBackendName()), nil
+}
+
+func reportPath(outputDir, cobolPath string) string {
+	rel := filepath.ToSlash(cobolPath)
+	rel = strings.NewReplacer(":", "", "/", "_", "\\", "_").Replace(rel)
+	ext := filepath.Ext(rel)
+	rel = strings.TrimSuffix(rel, ext)
+	return filepath.Join(outputDir, rel+".md")
+}
+
+func workerCount(nfiles int) int {
+	n := workers
+	if n < 1 {
+		n = 1
+	}
+	if nfiles > 0 && n > nfiles {
+		n = nfiles
+	}
+	return n
+}
+
+func runPool(files []string, nworkers int, worker func(string)) {
+	fileCh := make(chan string, nworkers*2)
+	var wg sync.WaitGroup
+	wg.Add(nworkers)
+	for i := 0; i < nworkers; i++ {
+		go func() {
+			defer wg.Done()
+			for f := range fileCh {
+				worker(f)
+			}
+		}()
+	}
+	for _, f := range files {
+		fileCh <- f
+	}
+	close(fileCh)
+	wg.Wait()
+}
+
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze [path]",
-	Short: "Analyze legacy code in the specified path",
+	Short: "Analyze COBOL files in a path",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		config, err := LoadConfig()
@@ -73,21 +129,22 @@ var analyzeCmd = &cobra.Command{
 			fmt.Println(f)
 		}
 
-		fileCh := make(chan string, workers*2)
-		resultCh := make(chan string, workers)
-		errCh := make(chan error, workers)
-		var wg sync.WaitGroup
+		if config.OutputDir != "" {
+			if err := os.MkdirAll(config.OutputDir, 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to create output directory %s: %v\n", config.OutputDir, err)
+				os.Exit(1)
+			}
+		}
 
 		workerFunc := func(f string) {
 			rustBin := config.RustBackendPath
 			if rustBin == "" {
-				exePath, err := os.Executable()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "failed to get executable path: %v\n", err)
+				var resolveErr error
+				rustBin, resolveErr = defaultRustBackend()
+				if resolveErr != nil {
+					fmt.Fprintf(os.Stderr, "failed to get executable path: %v\n", resolveErr)
 					return
 				}
-				exeDir := filepath.Dir(exePath)
-				rustBin = filepath.Join(exeDir, "..", "codesleuth", "target", "release", "codesleuth.exe")
 			}
 			if _, statErr := os.Stat(rustBin); statErr != nil {
 				fmt.Fprintf(os.Stderr, "rust backend not found at %s: %v\n", rustBin, statErr)
@@ -100,53 +157,38 @@ var analyzeCmd = &cobra.Command{
 			if debug {
 				rustArgs = append(rustArgs, "--debug")
 			}
+			if config.OutputDir != "" {
+				rustArgs = append(rustArgs, "--output", reportPath(config.OutputDir, f))
+			}
 			rustCmd := exec.Command(rustArgs[0], rustArgs[1:]...)
 			var rustStdout, rustStderr strings.Builder
 			rustCmd.Stdout = &rustStdout
 			rustCmd.Stderr = &rustStderr
-			err := rustCmd.Run()
+			runErr := rustCmd.Run()
 			if (verbose || debug) && rustStderr.Len() > 0 {
 				fmt.Fprint(os.Stderr, rustStderr.String())
 			}
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error running codesleuth analyze on %s: %v\n", f, err)
+			if runErr != nil {
+				fmt.Fprintf(os.Stderr, "error running codesleuth analyze on %s: %v\n", f, runErr)
+				return
+			}
+			if config.OutputDir != "" {
+				fmt.Printf("Analyzed: %s -> %s\n", f, reportPath(config.OutputDir, f))
 				return
 			}
 			fmt.Printf("Analyzed: %s\n%s", f, rustStdout.String())
 		}
 
+		nworkers := workerCount(len(files))
 		if benchmark {
-			bm := RunBenchmark(files, workerFunc)
+			bm := RunBenchmark(files, nworkers, workerFunc)
 			bm.PrintSummaryTable()
 			bm.PrintSummaryJSON()
 			return
 		}
-
-		wg.Add(workers)
-		for i := 0; i < workers; i++ {
-			go func() {
-				defer wg.Done()
-				for f := range fileCh {
-					workerFunc(f)
-				}
-			}()
+		if len(files) == 0 {
+			return
 		}
-
-		go func() {
-			for _, f := range files {
-				fileCh <- f
-			}
-			close(fileCh)
-		}()
-
-		for i := 0; i < len(files); i++ {
-			select {
-			case res := <-resultCh:
-				fmt.Println(res)
-			case err := <-errCh:
-				fmt.Fprintln(os.Stderr, err)
-			}
-		}
-		wg.Wait()
+		runPool(files, nworkers, workerFunc)
 	},
 }

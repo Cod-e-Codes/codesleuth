@@ -1,19 +1,11 @@
 version: 2
 updates:
-  # Rust (Cargo) - Parser
   - package-ecosystem: "cargo"
-    directory: "/parser"
+    directory: "/codesleuth"
     schedule:
       interval: "weekly"
 
-  # Rust (Cargo) - Summarizer
-  - package-ecosystem: "cargo"
-    directory: "/summarizer"
-    schedule:
-      interval: "weekly"
-
-  # Go (Go modules)
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "weekly" 
+      interval: "weekly"

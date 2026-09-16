@@ -17,4 +17,4 @@ fn test_summarizer() {
     assert!(md.contains("Program Name"));
     assert!(md.contains("Procedure Division"));
     assert!(md.contains("COBOL Program Summary"));
-} 
+}

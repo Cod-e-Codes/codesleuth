@@ -1,7 +1,7 @@
+use codesleuth::parser;
+use std::env;
 use std::fs::File;
 use std::io::Write;
-use std::env;
-use codesleuth::parser;
 
 #[test]
 fn test_parser() {
@@ -19,4 +19,4 @@ fn test_parser() {
     assert!(ir_json.contains("TESTPROG"));
     assert!(ir_json.contains("program_name"));
     std::fs::remove_file(tmp_path).unwrap();
-} 
+}
