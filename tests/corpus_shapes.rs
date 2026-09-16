@@ -803,7 +803,7 @@ fn pic_v_and_edited_are_numeric() {
 }
 
 #[test]
-fn unused_paragraph_without_perform_is_listed() {
+fn paragraph_after_goback_is_unused() {
     let (_ir, md) = parse_md(
         "unused.cob",
         r#"
@@ -819,8 +819,39 @@ fn unused_paragraph_without_perform_is_listed() {
 "#,
     );
     assert!(md.contains("## Unused Paragraphs"), "{md}");
-    assert!(md.contains("**200-DEAD**"), "{md}");
+    let unused = md.split("## Unused Paragraphs").nth(1).unwrap();
+    assert!(unused.contains("**200-DEAD**"), "{unused}");
+    assert!(!unused.contains("**100-MAIN**"), "{unused}");
     assert!(!md.contains("_No unused paragraphs found._"), "{md}");
+}
+
+#[test]
+fn fall_through_next_paragraph_is_reachable() {
+    let (_ir, md) = parse_md(
+        "fallthru.cob",
+        r#"
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. FALLTHRU.
+       PROCEDURE DIVISION.
+       OPEN-FILES.
+           OPEN INPUT ACCT-REC.
+       READ-NEXT-RECORD.
+           PERFORM READ-RECORD
+           PERFORM UNTIL LASTREC = 'Y'
+               PERFORM WRITE-RECORD
+               PERFORM READ-RECORD
+           END-PERFORM.
+       CLOSE-STOP.
+           CLOSE ACCT-REC
+           GOBACK.
+       READ-RECORD.
+           READ ACCT-REC AT END MOVE 'Y' TO LASTREC
+           END-READ.
+       WRITE-RECORD.
+           WRITE PRINT-REC.
+"#,
+    );
+    assert!(!md.contains("## Unused Paragraphs"), "{md}");
 }
 
 #[test]

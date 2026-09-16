@@ -1,7 +1,9 @@
 //! COBOL IR to Markdown.
 use crate::cobol;
 use crate::error::Error;
-use crate::ir::{CallGraphEntry, ControlFlowEdge, DataItem, Statement, VariableUsage, IR};
+use crate::ir::{
+    CallGraphEntry, ControlFlowEdge, DataItem, Paragraph, Statement, VariableUsage, IR,
+};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 
@@ -137,11 +139,7 @@ fn print_linkage<W: Write>(out: &mut W, items: &[DataItem]) -> io::Result<()> {
     Ok(())
 }
 
-fn print_procedure_division<W: Write>(
-    out: &mut W,
-    ir: &IR,
-    all_paragraphs_out: &mut Vec<(String, String, Option<usize>)>,
-) -> io::Result<()> {
+fn print_procedure_division<W: Write>(out: &mut W, ir: &IR) -> io::Result<()> {
     let mut all_paras = Vec::new();
     for section in &ir.procedure_division.sections {
         all_paras.extend(section.paragraphs.clone());
@@ -165,9 +163,6 @@ fn print_procedure_division<W: Write>(
         let line = para.line;
         let key = (pname.clone(), section.clone(), line);
         para_map.insert(key, para);
-        if !pname.is_empty() {
-            all_paragraphs_out.push((pname, section, line));
-        }
     }
     let mut para_rows: Vec<_> = para_map.into_iter().collect();
     para_rows.sort_by(|((n1, s1, l1), _), ((n2, s2, l2), _)| (l1, n1, s1).cmp(&(l2, n2, s2)));
@@ -286,63 +281,115 @@ fn write_var_row<W: Write>(out: &mut W, vu: &VariableUsage) -> io::Result<()> {
     writeln!(out, "| **{}** | {} | {} |", name, read, written)
 }
 
-fn print_unused_paragraphs<W: Write>(
-    out: &mut W,
-    all_paragraphs: &[(String, String, Option<usize>)],
-    call_graph: &[CallGraphEntry],
-) -> io::Result<()> {
-    let mut called = HashSet::new();
-    for edge in call_graph {
-        if ["PERFORM", "GOTO", "PERFORM VARYING"].contains(&edge.r#type.to_uppercase().as_str()) {
-            called.insert(edge.to.to_uppercase());
-        }
-    }
-    let mut used = HashSet::new();
-    if let Some((pname, _, _)) = all_paragraphs
+fn procedure_paragraphs(ir: &IR) -> Vec<&Paragraph> {
+    let mut paras: Vec<&Paragraph> = ir
+        .procedure_division
+        .sections
         .iter()
-        .min_by_key(|(_, _, line)| line.unwrap_or(usize::MAX))
-    {
-        used.insert(pname.to_uppercase());
+        .flat_map(|s| s.paragraphs.iter())
+        .filter(|p| !p.name.is_empty())
+        .collect();
+    if paras.is_empty() {
+        paras = ir
+            .paragraphs
+            .iter()
+            .filter(|p| !p.name.is_empty())
+            .collect();
     }
-    let mut unused_counter = HashMap::new();
-    for para in all_paragraphs {
-        let pname = &para.0;
-        if !called.contains(&pname.to_uppercase()) && !used.contains(&pname.to_uppercase()) {
-            let key = (pname.clone(), para.1.clone(), para.2);
-            *unused_counter.entry(key).or_insert(0) += 1;
+    paras.sort_by_key(|p| (p.line.unwrap_or(usize::MAX), p.name.as_str()));
+    paras
+}
+
+fn paragraph_cuts_fall_through(para: &Paragraph) -> bool {
+    let Some(last) = para.statements.last() else {
+        return false;
+    };
+    match last.r#type.to_uppercase().as_str() {
+        "GOBACK" | "GOTO" => true,
+        "STOP" => true,
+        "GO" => last
+            .operands
+            .first()
+            .is_some_and(|s| s.eq_ignore_ascii_case("TO")),
+        "EXIT" => last
+            .operands
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("PROGRAM")),
+        _ => false,
+    }
+}
+
+fn is_transfer_edge(edge: &CallGraphEntry) -> bool {
+    matches!(
+        edge.r#type.to_uppercase().as_str(),
+        "PERFORM" | "GOTO" | "PERFORM VARYING"
+    )
+}
+
+fn reachable_paragraph_names(
+    paras: &[&Paragraph],
+    call_graph: &[CallGraphEntry],
+) -> HashSet<String> {
+    let mut reachable = HashSet::new();
+    if let Some(first) = paras.first() {
+        reachable.insert(first.name.to_uppercase());
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (i, para) in paras.iter().enumerate() {
+            if !reachable.contains(&para.name.to_uppercase()) {
+                continue;
+            }
+            for edge in call_graph {
+                if is_transfer_edge(edge)
+                    && edge.from.eq_ignore_ascii_case(&para.name)
+                    && reachable.insert(edge.to.to_uppercase())
+                {
+                    changed = true;
+                }
+            }
+            if !paragraph_cuts_fall_through(para) {
+                if let Some(next) = paras.get(i + 1) {
+                    if reachable.insert(next.name.to_uppercase()) {
+                        changed = true;
+                    }
+                }
+            }
         }
     }
-    if unused_counter.is_empty() {
+    reachable
+}
+
+fn print_unused_paragraphs<W: Write>(out: &mut W, ir: &IR) -> io::Result<()> {
+    let paras = procedure_paragraphs(ir);
+    let reachable = reachable_paragraph_names(&paras, &ir.call_graph);
+    let mut unused: Vec<&Paragraph> = paras
+        .into_iter()
+        .filter(|p| !reachable.contains(&p.name.to_uppercase()))
+        .collect();
+    if unused.is_empty() {
         return Ok(());
     }
+    unused.sort_by_key(|p| (p.name.as_str(), p.line));
     writeln!(out, "\n## Unused Paragraphs\n")?;
     writeln!(
         out,
-        "**The following paragraphs are not the target of any PERFORM or GOTO:**\n"
+        "**The following paragraphs are not reachable by fall-through, PERFORM, or GOTO:**\n"
     )?;
-    let mut sorted_unused: Vec<_> = unused_counter.iter().collect();
-    sorted_unused.sort_by_key(|((pname, section, line), _)| (pname, section, line));
-    for ((pname, section, line), count) in sorted_unused {
+    for para in unused {
+        let section = para.section.as_deref().unwrap_or("");
         let section_info = if !section.is_empty() {
             format!(" _(Section: {})_", section)
         } else {
             String::new()
         };
-        let line_info = if let Some(l) = line {
+        let line_info = if let Some(l) = para.line {
             format!(" _(line {})_", l)
         } else {
             String::new()
         };
-        let count_info = if *count > 1 {
-            format!(" _(x{})_", count)
-        } else {
-            String::new()
-        };
-        writeln!(
-            out,
-            "- **{}**{}{}{}",
-            pname, section_info, line_info, count_info
-        )?;
+        writeln!(out, "- **{}**{}{}", para.name, section_info, line_info)?;
     }
     writeln!(out, "\n---\n")?;
     Ok(())
@@ -546,8 +593,7 @@ fn print_nested_programs<W: Write>(out: &mut W, nested: &[IR]) -> io::Result<()>
         print_working_storage(out, &program.data_division.working_storage)?;
         print_file_section(out, &program.data_division.file_section)?;
         print_linkage(out, &program.data_division.linkage)?;
-        let mut paras = Vec::new();
-        print_procedure_division(out, program, &mut paras)?;
+        print_procedure_division(out, program)?;
         print_nested_programs(out, &program.nested_programs)?;
     }
     Ok(())
@@ -567,15 +613,12 @@ pub fn render(ir: &IR, verbose: bool, debug: bool) -> Result<String, Error> {
         .map_err(|e| Error::Report(e.to_string()))?;
     print_linkage(&mut output, &ir.data_division.linkage)
         .map_err(|e| Error::Report(e.to_string()))?;
-    let mut all_paragraphs = Vec::new();
-    print_procedure_division(&mut output, ir, &mut all_paragraphs)
-        .map_err(|e| Error::Report(e.to_string()))?;
+    print_procedure_division(&mut output, ir).map_err(|e| Error::Report(e.to_string()))?;
     print_call_graph(&mut output, &ir.call_graph).map_err(|e| Error::Report(e.to_string()))?;
     print_control_flow_graph(&mut output, &ir.control_flow_graph)
         .map_err(|e| Error::Report(e.to_string()))?;
     print_io_files(&mut output, ir).map_err(|e| Error::Report(e.to_string()))?;
-    print_unused_paragraphs(&mut output, &all_paragraphs, &ir.call_graph)
-        .map_err(|e| Error::Report(e.to_string()))?;
+    print_unused_paragraphs(&mut output, ir).map_err(|e| Error::Report(e.to_string()))?;
     print_external_calls(&mut output, &ir.call_graph).map_err(|e| Error::Report(e.to_string()))?;
     print_nested_programs(&mut output, &ir.nested_programs)
         .map_err(|e| Error::Report(e.to_string()))?;
