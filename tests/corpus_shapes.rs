@@ -657,8 +657,12 @@ fn exec_sql_declare_in_working_storage_is_not_a_data_item() {
        PROGRAM-ID. SQLWS.
        DATA DIVISION.
        WORKING-STORAGE SECTION.
-           EXEC SQL DECLARE CUR1 CURSOR FOR SELECT ACCTNO FROM ACCOUNTS END-EXEC.
-       01 CUSTOMER-RECORD PIC X(8).
+           EXEC SQL DECLARE Z#####T TABLE
+                   (ACCTNO CHAR(8) NOT NULL)
+                   END-EXEC.
+           EXEC SQL DECLARE CUR1 CURSOR FOR SELECT ACCTNO FROM Z#####T END-EXEC.
+       01 CUSTOMER-RECORD.
+          02 ACCT-NO PIC X(8).
        PROCEDURE DIVISION.
            EXEC SQL OPEN CUR1 END-EXEC.
            GOBACK.
@@ -666,7 +670,10 @@ fn exec_sql_declare_in_working_storage_is_not_a_data_item() {
     );
     let names = data_names(&ir.data_division.working_storage);
     assert!(names.iter().any(|n| n == "CUSTOMER-RECORD"), "{names:?}");
+    assert!(names.iter().any(|n| n == "ACCT-NO"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "ACCTNO"), "{names:?}");
     assert!(!names.iter().any(|n| n.contains("CUR1")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("Z#####T")), "{names:?}");
     assert!(!names.iter().any(|n| n.contains("DECLARE")), "{names:?}");
     let stmts: Vec<_> = ir
         .procedure_division
