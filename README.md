@@ -46,7 +46,15 @@ The Rust binary also accepts `parse`, `summarize`, and `analyze`.
 
 ## Limitations
 
-Not all COBOL dialects and constructs are parsed. Report failures in [issues](https://github.com/Cod-e-Codes/codesleuth/issues).
+The parser is not a complete COBOL implementation.
+
+- COPY is recorded as an unresolved copybook name. REPLACING is not applied, and copybooks are not expanded.
+- LINKAGE SECTION is not parsed.
+- Quoted literals are split on spaces, so operands in the report may not match the source tokens.
+- Missing AUTHOR is reported as UNKNOWN. Missing DATE-WRITTEN is filled with the analysis date.
+- File Section and Input/Output headings are always printed; they say no entries when the source has none.
+
+Report failures in [issues](https://github.com/Cod-e-Codes/codesleuth/issues).
 
 ## Contributing
 

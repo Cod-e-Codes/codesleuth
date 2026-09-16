@@ -1,11 +1,35 @@
 //! COBOL parser.
 use chrono::Utc;
 use once_cell::sync::Lazy;
-use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+
+static RE_COPY_ITEM: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*COPY\s+([A-Z0-9-]+)(?:\s+(.*?))?\s*$").unwrap());
+static RE_DATA_START: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*(\d{1,2})\s+([A-Z0-9-]+)(?:\s+(.*))?$").unwrap());
+static RE_DATA_ENTRY_START: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*\d{1,2}\s+[A-Z0-9-]+").unwrap());
+static RE_REDEFINES: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\bREDEFINES\s+([A-Z0-9-]+)").unwrap());
+static RE_OCCURS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\bOCCURS\s+(\d+)(?:\s+TIMES)?").unwrap());
+static RE_PIC: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\bPIC(?:TURE)?(?:\s+IS)?\s+(\S+)").unwrap());
+static RE_USAGE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:\bUSAGE(?:\s+IS)?\s+)?\b(COMP-3|COMPUTATIONAL-3|PACKED-DECIMAL|COMP-1|COMP-2|COMP-4|COMP-5|COMPUTATIONAL|COMP|BINARY|DISPLAY)\b").unwrap()
+});
+static RE_VALUE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\bVALUE(?:\s+IS)?\s+(.+)$").unwrap());
+static RE_SELECT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)SELECT\s+([A-Z0-9-]+).*?\bASSIGN\s+TO\s+(\S+)").unwrap());
+static RE_FD: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^\s*FD\s+([A-Z0-9-]+)").unwrap());
+static RE_01_LEVEL: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^\s*01\s+([A-Z0-9-]+)").unwrap());
+static RE_PROGRAM_ID: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*PROGRAM-ID\s*\.\s*(\S+)?").unwrap());
+static RE_PROC_DIV: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*PROCEDURE DIVISION\b").unwrap());
 
 static COBOL_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     HashSet::from([
@@ -217,8 +241,151 @@ fn infer_type_from_pic(pic: &str) -> String {
     "unknown".to_string()
 }
 
+fn usage_is_comp3(usage: &str) -> bool {
+    let u = usage.to_uppercase();
+    u.contains("COMP-3") || u.contains("PACKED") || u.contains("COMPUTATIONAL-3")
+}
+
+fn infer_item_type(pic: Option<&str>, usage: Option<&str>) -> Option<String> {
+    if let Some(u) = usage {
+        if usage_is_comp3(u) {
+            return Some("packed-decimal (COMP-3)".to_string());
+        }
+        let u = u.to_uppercase();
+        if u.contains("COMP") || u == "BINARY" {
+            return Some("binary".to_string());
+        }
+    }
+    pic.map(infer_type_from_pic)
+}
+
+fn item_is_comp3(pic: Option<&str>, usage: Option<&str>) -> bool {
+    usage.is_some_and(usage_is_comp3)
+        || pic.is_some_and(|p| {
+            let u = p.to_uppercase();
+            u.contains("COMP-3") || u.contains("PACKED")
+        })
+}
+
 fn normalize_name(s: &str) -> String {
     s.trim().trim_end_matches('.').to_uppercase()
+}
+
+fn is_cobol_comment_or_blank(line: &str) -> bool {
+    let t = line.trim();
+    t.is_empty() || t.starts_with('*')
+}
+
+fn terminator_period_index(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if !in_double && c == b'\'' {
+            if in_single && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                i += 2;
+                continue;
+            }
+            in_single = !in_single;
+        } else if !in_single && c == b'"' {
+            if in_double && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+                i += 2;
+                continue;
+            }
+            in_double = !in_double;
+        } else if !in_single
+            && !in_double
+            && c == b'.'
+            && s[i + 1..].chars().all(char::is_whitespace)
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn has_terminator_period(s: &str) -> bool {
+    terminator_period_index(s).is_some()
+}
+
+fn strip_terminator(s: &str) -> &str {
+    if let Some(i) = terminator_period_index(s) {
+        s[..i].trim_end()
+    } else {
+        s.trim_end()
+    }
+}
+
+fn starts_data_entry(line: &str) -> bool {
+    let t = line.trim_start();
+    t.to_uppercase().starts_with("COPY ") || RE_DATA_ENTRY_START.is_match(t)
+}
+
+fn parse_one_data_item(text: &str, section_name: Option<&str>) -> Option<DataItem> {
+    let text = strip_terminator(text).trim();
+    if text.is_empty() {
+        return None;
+    }
+    let section = section_name.map(|s| s.to_string());
+    if let Some(caps) = RE_COPY_ITEM.captures(text) {
+        let name = caps.get(1).map(|m| m.as_str().to_string())?;
+        let rest = caps
+            .get(2)
+            .map(|m| m.as_str().trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        return Some(DataItem {
+            name,
+            level: 1,
+            picture: None,
+            r#type: Some("copybook".to_string()),
+            value: rest,
+            occurs: None,
+            redefines: None,
+            comp3: false,
+            section,
+            children: Vec::new(),
+        });
+    }
+    let caps = RE_DATA_START.captures(text)?;
+    let level = caps.get(1)?.as_str().parse::<i32>().ok()?;
+    let name = caps.get(2)?.as_str().to_string();
+    let rest = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+    let redefines = RE_REDEFINES
+        .captures(rest)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+    let occurs = RE_OCCURS
+        .captures(rest)
+        .and_then(|c| c.get(1).and_then(|m| m.as_str().parse::<usize>().ok()));
+    let picture = RE_PIC.captures(rest).and_then(|c| {
+        c.get(1)
+            .map(|m| m.as_str().trim_end_matches('.').to_string())
+    });
+    let usage = RE_USAGE
+        .captures(rest)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()));
+    let value = RE_VALUE.captures(rest).and_then(|c| {
+        c.get(1)
+            .map(|m| m.as_str().trim().trim_end_matches('.').trim().to_string())
+            .filter(|s| !s.is_empty())
+    });
+    let r#type = infer_item_type(picture.as_deref(), usage.as_deref());
+    let comp3 = item_is_comp3(picture.as_deref(), usage.as_deref());
+    Some(DataItem {
+        name,
+        level,
+        picture,
+        r#type,
+        value,
+        occurs,
+        redefines,
+        comp3,
+        section,
+        children: Vec::new(),
+    })
 }
 
 fn parse_identification_division(source: &str) -> (String, String, String, Vec<String>) {
@@ -227,7 +394,7 @@ fn parse_identification_division(source: &str) -> (String, String, String, Vec<S
     let mut date_written = String::new();
     let mut comments = Vec::new();
     let mut in_ident = false;
-    let re_program = Regex::new(r"(?i)^\s*PROGRAM-ID\s*\.\s*(\S+)").unwrap();
+    let mut pending_program_id = false;
     let re_author = Regex::new(r"(?i)^\s*AUTHOR\s*\.\s*(.+)").unwrap();
     let re_date = Regex::new(r"(?i)^\s*DATE-WRITTEN\s*\.\s*(.+)").unwrap();
     let re_ident_div = Regex::new(r"(?i)^\s*IDENTIFICATION DIVISION\s*\.?\z").unwrap();
@@ -242,11 +409,26 @@ fn parse_identification_division(source: &str) -> (String, String, String, Vec<S
             if re_end_div.is_match(line) && !re_ident_div.is_match(line) {
                 break;
             }
-            if let Some(caps) = re_program.captures(line) {
-                program_name = caps
+            if let Some(caps) = RE_PROGRAM_ID.captures(line) {
+                let name = caps
                     .get(1)
-                    .map(|m| m.as_str().trim_end_matches('.').to_string())
-                    .unwrap_or_default();
+                    .map(|m| m.as_str().trim_end_matches('.').trim())
+                    .filter(|s| !s.is_empty());
+                if let Some(name) = name {
+                    program_name = name.to_string();
+                    pending_program_id = false;
+                } else {
+                    pending_program_id = true;
+                }
+            } else if pending_program_id {
+                if is_cobol_comment_or_blank(line) {
+                    if line.trim_start().starts_with('*') {
+                        comments.push(line.trim_start_matches('*').trim().to_string());
+                    }
+                } else if let Some(tok) = line.split_whitespace().next() {
+                    program_name = tok.trim_end_matches('.').to_string();
+                    pending_program_id = false;
+                }
             } else if let Some(caps) = re_author.captures(line) {
                 author = caps
                     .get(1)
@@ -267,7 +449,7 @@ fn parse_identification_division(source: &str) -> (String, String, String, Vec<S
 
 fn extract_section_lines<'a>(source: &'a str, section: &str) -> Vec<&'a str> {
     let re_start = Regex::new(&format!(r"(?i)^\s*{}\s*\.?$", section)).unwrap();
-    let re_end = Regex::new(r"(?i)^\s*(WORKING-STORAGE SECTION|FILE SECTION|LINKAGE SECTION|PROCEDURE DIVISION|[A-Z-]+ DIVISION)\s*\.?$").unwrap();
+    let re_end = Regex::new(r"(?i)^\s*(WORKING-STORAGE SECTION|FILE SECTION|LINKAGE SECTION|PROCEDURE DIVISION|[A-Z-]+ DIVISION)\b").unwrap();
     let mut lines = Vec::new();
     let mut in_section = false;
     for line in source.lines() {
@@ -286,52 +468,33 @@ fn extract_section_lines<'a>(source: &'a str, section: &str) -> Vec<&'a str> {
 }
 
 fn parse_data_items(section_lines: &[&str], section_name: Option<&str>) -> Vec<DataItem> {
-    let re_item = Regex::new(
-        r"(?i)^\s*(\d{2})\s+([A-Z0-9-]+)(?:\s+REDEFINES\s+([A-Z0-9-]+))?(?:\s+OCCURS\s+(\d+))?(?:\s+PIC\s+([A-Z0-9\(\)V\.,$S-]+))?(?:\s+VALUE\s+([^\.]+))?\s*\.?$"
-    ).unwrap();
-    let parsed: Vec<_> = section_lines
-        .par_iter()
-        .map(|line| {
-            if let Some(caps) = re_item.captures(line) {
-                let level = caps[1].parse::<i32>().unwrap_or(0);
-                let name = caps[2].to_string();
-                let redefines = caps.get(3).map(|m| m.as_str().to_string());
-                let occurs = caps.get(4).and_then(|m| m.as_str().parse::<usize>().ok());
-                let picture = caps.get(5).map(|m| m.as_str().to_string());
-                let value = caps.get(6).map(|m| m.as_str().trim().to_string());
-                let comp3 = picture.as_ref().is_some_and(|pic| {
-                    let u = pic.to_uppercase();
-                    u.contains("COMP-3") || u.contains("PACKED")
-                });
-                let r#type = picture.as_ref().map(|pic| infer_type_from_pic(pic));
-                let section = section_name.map(|s| s.to_string());
-                DataItem {
-                    name,
-                    level,
-                    picture,
-                    r#type,
-                    value,
-                    occurs,
-                    redefines,
-                    comp3,
-                    section,
-                    children: Vec::new(),
-                }
+    let mut logical = Vec::new();
+    let mut pending = String::new();
+    for line in section_lines {
+        if is_cobol_comment_or_blank(line) {
+            continue;
+        }
+        let trimmed = line.trim();
+        if pending.is_empty() {
+            if starts_data_entry(trimmed) {
+                pending.push_str(trimmed);
             } else {
-                DataItem {
-                    name: String::new(),
-                    level: 0,
-                    picture: None,
-                    r#type: None,
-                    value: None,
-                    occurs: None,
-                    redefines: None,
-                    comp3: false,
-                    section: section_name.map(|s| s.to_string()),
-                    children: Vec::new(),
-                }
+                continue;
             }
-        })
+        } else {
+            pending.push(' ');
+            pending.push_str(trimmed);
+        }
+        if has_terminator_period(&pending) {
+            logical.push(std::mem::take(&mut pending));
+        }
+    }
+    if !pending.trim().is_empty() {
+        logical.push(pending);
+    }
+    let parsed: Vec<DataItem> = logical
+        .iter()
+        .filter_map(|text| parse_one_data_item(text, section_name))
         .collect();
     let mut stack: Vec<(i32, DataItem)> = Vec::new();
     let mut result: Vec<DataItem> = Vec::new();
@@ -356,7 +519,6 @@ fn parse_data_items(section_lines: &[&str], section_name: Option<&str>) -> Vec<D
             result.push(item);
         }
     }
-    result.reverse();
     result
 }
 
@@ -420,30 +582,180 @@ fn extract_variable_usage(
         .collect()
 }
 
+fn consume_procedure_header(line: &str, in_proc: &mut bool, skip_using: &mut bool) -> bool {
+    if !*in_proc && RE_PROC_DIV.is_match(line) {
+        *in_proc = true;
+        if line.to_uppercase().contains("USING") && !has_terminator_period(line) {
+            *skip_using = true;
+        }
+        return true;
+    }
+    if *skip_using {
+        if has_terminator_period(line) {
+            *skip_using = false;
+        }
+        return true;
+    }
+    false
+}
+
+fn implicit_paragraph_name(program_name: &str) -> String {
+    if program_name.is_empty() {
+        "MAIN".to_string()
+    } else {
+        program_name.to_string()
+    }
+}
+
+fn finish_paragraph(
+    current_paragraph: &mut Option<Paragraph>,
+    current_section: &mut Option<ProcedureSection>,
+    default_section_paragraphs: &mut Vec<Paragraph>,
+    all_paragraphs_flat: &mut Vec<Paragraph>,
+    para_name_map: &HashMap<String, String>,
+) {
+    if let Some(mut p) = current_paragraph.take() {
+        p.variable_usage = extract_variable_usage(&p.statements, para_name_map);
+        if let Some(sec) = current_section.as_mut() {
+            sec.paragraphs.push(p.clone());
+        } else {
+            default_section_paragraphs.push(p.clone());
+        }
+        all_paragraphs_flat.push(p);
+    }
+}
+
+fn ensure_paragraph(
+    current_paragraph: &mut Option<Paragraph>,
+    current_paragraph_name: &mut String,
+    current_section: &Option<ProcedureSection>,
+    program_name: &str,
+    line_no: usize,
+) {
+    if current_paragraph.is_some() {
+        return;
+    }
+    let name = implicit_paragraph_name(program_name);
+    *current_paragraph_name = name.clone();
+    *current_paragraph = Some(Paragraph {
+        name,
+        section: current_section.as_ref().map(|s| s.name.clone()),
+        kind: "paragraph".to_string(),
+        line: Some(line_no),
+        source_location: None,
+        statements: Vec::new(),
+        variable_usage: Vec::new(),
+    });
+}
+
+fn record_statement(
+    para: &mut Paragraph,
+    current_paragraph_name: &str,
+    current_section: &Option<ProcedureSection>,
+    line: &str,
+    line_no: usize,
+    para_name_map: &HashMap<String, String>,
+    call_graph: &mut Vec<CallGraphEntry>,
+) {
+    let trimmed = line.trim();
+    let mut parts = trimmed.split_whitespace();
+    let stype = parts
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_uppercase();
+    let operands: Vec<String> = parts.map(|s| s.to_string()).collect();
+    let stmt = Statement {
+        r#type: stype.clone(),
+        operands: operands.clone(),
+        raw: trimmed.to_string(),
+        line: Some(line_no),
+        source_location: None,
+    };
+    para.statements.push(stmt);
+    if stype == "PERFORM" && !operands.is_empty() {
+        let target = normalize_name(&operands[0]);
+        if let Some(to_name) = para_name_map.get(&target) {
+            call_graph.push(CallGraphEntry {
+                from: current_paragraph_name.to_string(),
+                to: to_name.clone(),
+                r#type: if operands.iter().any(|s| s.eq_ignore_ascii_case("UNTIL")) {
+                    "PERFORM VARYING".to_string()
+                } else {
+                    "PERFORM".to_string()
+                },
+                kind: "edge".to_string(),
+                line: Some(line_no),
+                section: current_section.as_ref().map(|s| s.name.clone()),
+                source_location: None,
+            });
+        }
+    } else if (stype == "GO"
+        && operands
+            .first()
+            .is_some_and(|s| s.eq_ignore_ascii_case("TO")))
+        || stype == "GOTO"
+    {
+        let target = if stype == "GO" {
+            operands.get(1)
+        } else {
+            operands.first()
+        };
+        if let Some(target) = target {
+            let target_norm = normalize_name(target);
+            if let Some(to_name) = para_name_map.get(&target_norm) {
+                call_graph.push(CallGraphEntry {
+                    from: current_paragraph_name.to_string(),
+                    to: to_name.clone(),
+                    r#type: "GOTO".to_string(),
+                    kind: "edge".to_string(),
+                    line: Some(line_no),
+                    section: current_section.as_ref().map(|s| s.name.clone()),
+                    source_location: None,
+                });
+            }
+        }
+    } else if stype == "CALL" && !operands.is_empty() {
+        let mut target = operands[0].trim_end_matches('.').to_string();
+        target = target.trim_matches('"').trim_matches('\'').to_string();
+        let target_norm = normalize_name(&target);
+        if !target_norm.is_empty() {
+            call_graph.push(CallGraphEntry {
+                from: current_paragraph_name.to_string(),
+                to: target_norm,
+                r#type: "CALL".to_string(),
+                kind: "edge".to_string(),
+                line: Some(line_no),
+                section: current_section.as_ref().map(|s| s.name.clone()),
+                source_location: None,
+            });
+        }
+    }
+}
+
 fn parse_procedure_division_and_call_graph(
     source: &str,
+    program_name: &str,
 ) -> (
     ProcedureDivision,
     Vec<CallGraphEntry>,
     Vec<ControlFlowEdge>,
     Vec<Paragraph>,
 ) {
-    let re_proc_div = Regex::new(r"(?i)^\s*PROCEDURE DIVISION\s*\.?$").unwrap();
     let re_division = Regex::new(r"(?i)^\s*\w+ DIVISION\s*\.?$").unwrap();
     let re_section = Regex::new(r"^\s*([A-Z0-9-]+) SECTION\s*\.\s*$").unwrap();
     let re_paragraph = Regex::new(r"^\s*([A-Z0-9-]+)\.\s*$").unwrap();
-    let skip_paragraphs = ["END-IF", "END-READ", "GOBACK"];
+    let skip_paragraphs = ["END-IF", "END-READ", "END-EVALUATE", "END-PERFORM", "GOBACK"];
     let mut in_proc = false;
-    let mut all_paragraphs: Vec<String> = Vec::new();
+    let mut skip_using = false;
     let mut para_name_map: HashMap<String, String> = HashMap::new();
     for line in source.lines() {
         let line = line.trim_end();
-        if !in_proc && re_proc_div.is_match(line) {
-            in_proc = true;
+        if consume_procedure_header(line, &mut in_proc, &mut skip_using) {
             continue;
         }
         if in_proc {
-            if re_division.is_match(line) && !re_proc_div.is_match(line) {
+            if re_division.is_match(line) && !RE_PROC_DIV.is_match(line) {
                 break;
             }
             if let Some(para_caps) = re_paragraph.captures(line) {
@@ -455,12 +767,12 @@ fn parse_procedure_division_and_call_graph(
                     continue;
                 }
                 let norm_name = normalize_name(&name);
-                all_paragraphs.push(norm_name.clone());
-                para_name_map.insert(norm_name, name.clone());
+                para_name_map.insert(norm_name, name);
             }
         }
     }
     in_proc = false;
+    skip_using = false;
     let mut sections: Vec<ProcedureSection> = Vec::new();
     let mut current_section: Option<ProcedureSection> = None;
     let mut current_paragraph: Option<Paragraph> = None;
@@ -471,21 +783,22 @@ fn parse_procedure_division_and_call_graph(
     let mut all_paragraphs_flat: Vec<Paragraph> = Vec::new();
     for (i, line) in source.lines().enumerate() {
         let line = line.trim_end();
-        if !in_proc && re_proc_div.is_match(line) {
-            in_proc = true;
+        if consume_procedure_header(line, &mut in_proc, &mut skip_using) {
             continue;
         }
         if in_proc {
-            if re_division.is_match(line) && !re_proc_div.is_match(line) {
+            if re_division.is_match(line) && !RE_PROC_DIV.is_match(line) {
                 break;
             }
             if let Some(sec_caps) = re_section.captures(line) {
-                if let Some(mut sec) = current_section.take() {
-                    if let Some(mut p) = current_paragraph.take() {
-                        p.variable_usage = extract_variable_usage(&p.statements, &para_name_map);
-                        sec.paragraphs.push(p.clone());
-                        all_paragraphs_flat.push(p);
-                    }
+                finish_paragraph(
+                    &mut current_paragraph,
+                    &mut current_section,
+                    &mut default_section_paragraphs,
+                    &mut all_paragraphs_flat,
+                    &para_name_map,
+                );
+                if let Some(sec) = current_section.take() {
                     sections.push(sec);
                 }
                 current_section = Some(ProcedureSection {
@@ -495,7 +808,6 @@ fn parse_procedure_division_and_call_graph(
                         .unwrap_or_default(),
                     paragraphs: Vec::new(),
                 });
-                current_paragraph = None;
                 current_paragraph_name.clear();
             } else if let Some(para_caps) = re_paragraph.captures(line) {
                 let name = para_caps
@@ -503,17 +815,33 @@ fn parse_procedure_division_and_call_graph(
                     .map(|m| m.as_str().to_string())
                     .unwrap_or_default();
                 if skip_paragraphs.contains(&name.as_str()) {
+                    ensure_paragraph(
+                        &mut current_paragraph,
+                        &mut current_paragraph_name,
+                        &current_section,
+                        program_name,
+                        i + 1,
+                    );
+                    if let Some(ref mut para) = current_paragraph {
+                        record_statement(
+                            para,
+                            &current_paragraph_name,
+                            &current_section,
+                            line,
+                            i + 1,
+                            &para_name_map,
+                            &mut call_graph,
+                        );
+                    }
                     continue;
                 }
-                if let Some(ref mut para) = current_paragraph {
-                    para.variable_usage = extract_variable_usage(&para.statements, &para_name_map);
-                    if let Some(ref mut sec) = current_section {
-                        sec.paragraphs.push(para.clone());
-                    } else {
-                        default_section_paragraphs.push(para.clone());
-                    }
-                    all_paragraphs_flat.push(para.clone());
-                }
+                finish_paragraph(
+                    &mut current_paragraph,
+                    &mut current_section,
+                    &mut default_section_paragraphs,
+                    &mut all_paragraphs_flat,
+                    &para_name_map,
+                );
                 current_paragraph_name = name.clone();
                 current_paragraph = Some(Paragraph {
                     name,
@@ -524,100 +852,35 @@ fn parse_procedure_division_and_call_graph(
                     statements: Vec::new(),
                     variable_usage: Vec::new(),
                 });
-            } else if let Some(ref mut para) = current_paragraph {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() && !trimmed.starts_with('*') {
-                    let mut parts = trimmed.split_whitespace();
-                    let stype = parts.next().unwrap_or("").to_uppercase();
-                    let operands: Vec<String> = parts.map(|s| s.to_string()).collect();
-                    let stmt = Statement {
-                        r#type: stype.clone(),
-                        operands: operands.clone(),
-                        raw: trimmed.to_string(),
-                        line: Some(i + 1),
-                        source_location: None,
-                    };
-                    para.statements.push(stmt.clone());
-                    // Recursion guard for PERFORM ... THRU ...
-                    if stype == "PERFORM" && !operands.is_empty() {
-                        let target = normalize_name(&operands[0]);
-                        // Use a local visited set to prevent infinite recursion
-                        let mut visited = HashSet::new();
-                        if let Some(to_name) = para_name_map.get(&target) {
-                            if !visited.contains(to_name) {
-                                visited.insert(to_name.clone());
-                                call_graph.push(CallGraphEntry {
-                                    from: current_paragraph_name.clone(),
-                                    to: to_name.clone(),
-                                    r#type: if operands.iter().any(|s| s.to_uppercase() == "UNTIL")
-                                    {
-                                        "PERFORM VARYING".to_string()
-                                    } else {
-                                        "PERFORM".to_string()
-                                    },
-                                    kind: "edge".to_string(),
-                                    line: Some(i + 1),
-                                    section: current_section.as_ref().map(|s| s.name.clone()),
-                                    source_location: None,
-                                });
-                            }
-                        }
-                    } else if (stype == "GO"
-                        && operands.first().map(|s| s.to_uppercase()) == Some("TO".to_string()))
-                        || stype == "GOTO"
-                    {
-                        let target = if stype == "GO" {
-                            operands.get(1)
-                        } else {
-                            operands.first()
-                        };
-                        if let Some(target) = target {
-                            let target_norm = normalize_name(target);
-                            let mut visited = HashSet::new();
-                            if let Some(to_name) = para_name_map.get(&target_norm) {
-                                if !visited.contains(to_name) {
-                                    visited.insert(to_name.clone());
-                                    call_graph.push(CallGraphEntry {
-                                        from: current_paragraph_name.clone(),
-                                        to: to_name.clone(),
-                                        r#type: "GOTO".to_string(),
-                                        kind: "edge".to_string(),
-                                        line: Some(i + 1),
-                                        section: current_section.as_ref().map(|s| s.name.clone()),
-                                        source_location: None,
-                                    });
-                                }
-                            }
-                        }
-                    } else if stype == "CALL" && !operands.is_empty() {
-                        let mut target = operands[0].trim_end_matches('.').to_string();
-                        target = target.trim_matches('"').trim_matches('\'').to_string();
-                        let target_norm = normalize_name(&target);
-                        if !target_norm.is_empty() {
-                            call_graph.push(CallGraphEntry {
-                                from: current_paragraph_name.clone(),
-                                to: target_norm,
-                                r#type: "CALL".to_string(),
-                                kind: "edge".to_string(),
-                                line: Some(i + 1),
-                                section: current_section.as_ref().map(|s| s.name.clone()),
-                                source_location: None,
-                            });
-                        }
-                    }
+            } else if !is_cobol_comment_or_blank(line) && line.trim() != "." {
+                ensure_paragraph(
+                    &mut current_paragraph,
+                    &mut current_paragraph_name,
+                    &current_section,
+                    program_name,
+                    i + 1,
+                );
+                if let Some(ref mut para) = current_paragraph {
+                    record_statement(
+                        para,
+                        &current_paragraph_name,
+                        &current_section,
+                        line,
+                        i + 1,
+                        &para_name_map,
+                        &mut call_graph,
+                    );
                 }
             }
         }
     }
-    if let Some(ref mut para) = current_paragraph {
-        para.variable_usage = extract_variable_usage(&para.statements, &para_name_map);
-        if let Some(ref mut sec) = current_section {
-            sec.paragraphs.push(para.clone());
-        } else {
-            default_section_paragraphs.push(para.clone());
-        }
-        all_paragraphs_flat.push(para.clone());
-    }
+    finish_paragraph(
+        &mut current_paragraph,
+        &mut current_section,
+        &mut default_section_paragraphs,
+        &mut all_paragraphs_flat,
+        &para_name_map,
+    );
     if let Some(sec) = current_section {
         sections.push(sec);
     }
@@ -650,7 +913,11 @@ fn parse_procedure_division_and_call_graph(
                         control_flow_graph.push(ControlFlowEdge {
                             from: format!("{}:{}", para.name, stmt.raw),
                             to: format!("{}:{}", to_name, stmt.raw),
-                            r#type: if stmt.operands.iter().any(|s| s.to_uppercase() == "UNTIL") {
+                            r#type: if stmt
+                                .operands
+                                .iter()
+                                .any(|s| s.eq_ignore_ascii_case("UNTIL"))
+                            {
                                 "PERFORM VARYING".to_string()
                             } else {
                                 "PERFORM".to_string()
@@ -698,6 +965,76 @@ fn parse_open_statements(source: &str) -> HashMap<String, String> {
     file_modes
 }
 
+fn push_select_file(
+    files: &mut Vec<IOFile>,
+    select_buf: &str,
+    file_modes: &HashMap<String, String>,
+) {
+    let text = strip_terminator(select_buf);
+    let Some(caps) = RE_SELECT.captures(text) else {
+        return;
+    };
+    let name = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
+    let assigned = caps
+        .get(2)
+        .map(|m| {
+            m.as_str()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim_end_matches(',')
+                .to_string()
+        })
+        .unwrap_or_default();
+    let r#type = file_modes.get(&name).cloned().unwrap_or_else(|| {
+        if name.contains("IN") {
+            "input".to_string()
+        } else if name.contains("OUT") {
+            "output".to_string()
+        } else {
+            "unknown".to_string()
+        }
+    });
+    files.push(IOFile {
+        name,
+        r#type,
+        description: format!("Assigned to {}", assigned),
+        record_name: None,
+    });
+}
+
+fn attach_record_names(files: &mut [IOFile], file_section_lines: &[&str]) {
+    let mut current_fd: Option<String> = None;
+    let mut waiting_01 = false;
+    for line in file_section_lines {
+        if is_cobol_comment_or_blank(line) {
+            continue;
+        }
+        if let Some(caps) = RE_FD.captures(line) {
+            current_fd = Some(caps[1].to_string());
+            waiting_01 = true;
+            continue;
+        }
+        if waiting_01 {
+            if let Some(caps) = RE_01_LEVEL.captures(line) {
+                let record_name = caps[1].to_string();
+                if let Some(fd) = &current_fd {
+                    for file in files.iter_mut() {
+                        if file.name.eq_ignore_ascii_case(fd) {
+                            file.record_name = Some(record_name.clone());
+                        }
+                    }
+                }
+                waiting_01 = false;
+            } else if line.trim_start().to_uppercase().starts_with("COPY") {
+                waiting_01 = false;
+            }
+        }
+    }
+}
+
 fn parse_input_output_section(source: &str, file_modes: &HashMap<String, String>) -> Vec<IOFile> {
     let mut files = Vec::new();
     let mut in_env = false;
@@ -705,17 +1042,8 @@ fn parse_input_output_section(source: &str, file_modes: &HashMap<String, String>
     let re_env_div = Regex::new(r"(?i)^\s*ENVIRONMENT DIVISION\s*\.?$").unwrap();
     let re_io_sec = Regex::new(r"(?i)^\s*INPUT-OUTPUT SECTION\s*\.?$").unwrap();
     let re_file_control = Regex::new(r"(?i)^\s*FILE-CONTROL\s*\.?$").unwrap();
-    let re_select =
-        Regex::new(r"(?i)^\s*SELECT\s+([A-Z0-9-]+)\s+ASSIGN\s+TO\s+('?\w+'?)\s*\.\s*$").unwrap();
-    let re_fd = Regex::new(r"(?i)^\s*FD\s+([A-Z0-9-]+)\s*.*").unwrap();
-    let re_01_level = Regex::new(r"(?i)^\s*01\s+([A-Z0-9-]+)\s*.*").unwrap();
-    let mut select_to_fd: HashMap<String, String> = HashMap::new();
-    let mut last_select: Option<String> = None;
-    let file_section_lines = extract_section_lines(source, "FILE SECTION");
-    let file_section = parse_data_items(&file_section_lines, Some("FILE SECTION"));
-    let file_section_names: HashSet<String> =
-        file_section.iter().map(|item| item.name.clone()).collect();
-    let mut expecting_01 = false;
+    let re_any_div = Regex::new(r"(?i)^\s*[A-Z][A-Z0-9-]* DIVISION\s*\.?").unwrap();
+    let mut select_buf = String::new();
     for line in source.lines() {
         let line = line.trim_end();
         if !in_env && re_env_div.is_match(line) {
@@ -727,61 +1055,36 @@ fn parse_input_output_section(source: &str, file_modes: &HashMap<String, String>
             continue;
         }
         if in_env && in_io {
-            if re_env_div.is_match(line) && !re_io_sec.is_match(line) {
+            if re_any_div.is_match(line) && !re_env_div.is_match(line) {
+                if !select_buf.is_empty() {
+                    push_select_file(&mut files, &select_buf, file_modes);
+                }
                 break;
             }
-            if re_file_control.is_match(line) {
+            if re_file_control.is_match(line) || is_cobol_comment_or_blank(line) {
                 continue;
             }
-            if let Some(caps) = re_select.captures(line) {
-                let name = caps
-                    .get(1)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default();
-                last_select = Some(name.clone());
-                expecting_01 = false;
-                let assigned = caps
-                    .get(2)
-                    .map(|m| m.as_str().trim_matches('"').trim_matches('\'').to_string())
-                    .unwrap_or_default();
-                let r#type = file_modes.get(&name).cloned().unwrap_or_else(|| {
-                    if name.contains("IN") {
-                        "input".to_string()
-                    } else if name.contains("OUT") {
-                        "output".to_string()
-                    } else {
-                        "unknown".to_string()
-                    }
-                });
-                files.push(IOFile {
-                    name: name.clone(),
-                    r#type,
-                    description: format!("Assigned to {}", assigned),
-                    record_name: None,
-                });
-            } else if let Some(_caps) = re_fd.captures(line) {
-                expecting_01 = true;
-            } else if expecting_01 {
-                if let Some(caps) = re_01_level.captures(line) {
-                    let record_name = caps
-                        .get(1)
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_default();
-                    if let Some(sel) = &last_select {
-                        if file_section_names.contains(&record_name) {
-                            select_to_fd.insert(sel.clone(), record_name.clone());
-                            for file in files.iter_mut() {
-                                if file.name == *sel {
-                                    file.record_name = Some(record_name.clone());
-                                }
-                            }
-                        }
-                    }
-                    expecting_01 = false;
+            let trimmed = line.trim();
+            let upper = trimmed.to_uppercase();
+            if select_buf.is_empty() {
+                if upper.starts_with("SELECT ") || upper == "SELECT" {
+                    select_buf.push_str(trimmed);
                 }
+            } else {
+                select_buf.push(' ');
+                select_buf.push_str(trimmed);
+            }
+            if !select_buf.is_empty() && has_terminator_period(&select_buf) {
+                push_select_file(&mut files, &select_buf, file_modes);
+                select_buf.clear();
             }
         }
     }
+    if !select_buf.is_empty() {
+        push_select_file(&mut files, &select_buf, file_modes);
+    }
+    let file_section_lines = extract_section_lines(source, "FILE SECTION");
+    attach_record_names(&mut files, &file_section_lines);
     files
 }
 
@@ -794,7 +1097,7 @@ pub fn parse_cobol_file(path: &str, verbose: bool, debug: bool) -> Result<String
     let file_lines = extract_section_lines(&file_content, "FILE SECTION");
     let file_section = parse_data_items(&file_lines, Some("FILE SECTION"));
     let (procedure_division, call_graph, control_flow_graph, paragraphs) =
-        parse_procedure_division_and_call_graph(&file_content);
+        parse_procedure_division_and_call_graph(&file_content, &program_name);
     let file_modes = parse_open_statements(&file_content);
     let io_files = parse_input_output_section(&file_content, &file_modes);
     let ir = IR {

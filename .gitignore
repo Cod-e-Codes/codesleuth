@@ -30,6 +30,9 @@ test-cobol/**/*.JCL
 # Ignore dummy/generated files
 benchmark-cobol/
 dummy-cobol/
+reports-verify/
+reports-bench1/
+reports-bench4/
 
 # Keep optional demo COBOL files (uncomment if needed)
 #!test-cobol/HELLO.cobol

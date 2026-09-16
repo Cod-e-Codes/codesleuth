@@ -37,7 +37,11 @@ jobs:
           cat > smoke/hello.cob << 'EOF'
                  IDENTIFICATION DIVISION.
                  PROGRAM-ID. HELLO.
+                 DATA DIVISION.
+                 WORKING-STORAGE SECTION.
+                 77  WHO PIC X(15).
                  PROCEDURE DIVISION.
-                 STOP RUN.
+                     DISPLAY 'HELLO WORLD!'.
+                     GOBACK.
           EOF
           ./cmd/codesleuth --rust-backend ./codesleuth/target/release/codesleuth analyze smoke

@@ -404,13 +404,13 @@ fn print_file_section<W: Write>(
 ) -> io::Result<()> {
     writeln!(out, "\n## File Section\n")?;
     if let Some(sections) = file_sections {
-        let level_1_items: Vec<DataItem> = sections
+        let named: Vec<DataItem> = sections
             .iter()
-            .filter(|item| item.level == Some(1))
+            .filter(|item| !get_str(&item.name).is_empty())
             .cloned()
             .collect();
-        if !level_1_items.is_empty() {
-            print_data_items(out, &level_1_items, 0, false)?;
+        if !named.is_empty() {
+            print_data_items(out, &named, 0, false)?;
         } else {
             writeln!(out, "_No File Section entries found._")?;
         }
@@ -482,12 +482,13 @@ fn print_procedure_division<W: Write>(
                     }
                 }
             }
-            if pname.is_empty() || (statements.is_empty() && filtered_vars.is_empty()) {
+            if statements.is_empty() && filtered_vars.is_empty() {
                 continue;
             }
             if pname.ends_with("-END") && statements.is_empty() {
                 continue;
             }
+            let display_name = if pname.is_empty() { "unnamed" } else { pname };
             let line_info = if let Some(l) = line {
                 format!(" (line {})", l)
             } else {
@@ -511,7 +512,7 @@ fn print_procedure_division<W: Write>(
             writeln!(
                 out,
                 "#### Paragraph: **{}**{}{}{}{}",
-                pname, line_info, src_info, section_info, kind_info
+                display_name, line_info, src_info, section_info, kind_info
             )?;
             if !statements.is_empty() {
                 for stmt in statements {
