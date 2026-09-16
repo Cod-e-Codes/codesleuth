@@ -103,12 +103,16 @@ fn print_data_items<W: Write>(
 }
 
 fn print_working_storage<W: Write>(out: &mut W, ws_vars: &[DataItem]) -> io::Result<()> {
-    writeln!(out, "\n## Working-Storage Variables\n")?;
-    for item in ws_vars {
-        if !item.name.is_empty() {
-            print_data_items(out, std::slice::from_ref(item), 0, false)?;
-        }
+    let named: Vec<&DataItem> = ws_vars
+        .iter()
+        .filter(|item| !item.name.is_empty())
+        .collect();
+    if named.is_empty() {
+        return Ok(());
     }
+    writeln!(out, "\n## Working-Storage Variables\n")?;
+    let owned: Vec<DataItem> = named.into_iter().cloned().collect();
+    print_data_items(out, &owned, 0, false)?;
     writeln!(out, "\n---\n")?;
     Ok(())
 }
@@ -409,17 +413,11 @@ fn sanitize_node_id(name: &str) -> String {
 }
 
 fn print_call_graph<W: Write>(out: &mut W, call_graph: &[CallGraphEntry]) -> io::Result<()> {
-    writeln!(out, "\n## Call Graph\n")?;
-    writeln!(out, "> **Legend:** Solid -> PERFORM, Dotted -.-> GOTO, Dashed --|VARYING|--> PERFORM VARYING, Double ==> CALL")?;
     if call_graph.is_empty() {
-        writeln!(out, "\n_No call graph generated (missing or empty in IR)._")?;
-        writeln!(out, "```mermaid")?;
-        writeln!(out, "flowchart TD")?;
-        writeln!(out, "    A[No call graph data]")?;
-        writeln!(out, "```")?;
-        writeln!(out, "\n---\n")?;
         return Ok(());
     }
+    writeln!(out, "\n## Call Graph\n")?;
+    writeln!(out, "> **Legend:** Solid -> PERFORM, Dotted -.-> GOTO, Dashed --|VARYING|--> PERFORM VARYING, Double ==> CALL")?;
     writeln!(out, "```mermaid")?;
     writeln!(
         out,
@@ -474,16 +472,11 @@ fn print_call_graph<W: Write>(out: &mut W, call_graph: &[CallGraphEntry]) -> io:
 }
 
 fn print_control_flow_graph<W: Write>(out: &mut W, cfg: &[ControlFlowEdge]) -> io::Result<()> {
-    writeln!(out, "\n## Control Flow Graph\n")?;
-    writeln!(out, "> **Legend:** Solid -> NEXT, Dotted -.-> GOTO, Solid -> PERFORM, Dashed --|VARYING|--> PERFORM VARYING")?;
     if cfg.is_empty() {
-        writeln!(
-            out,
-            "\n_No control flow graph generated (missing or empty in IR)._"
-        )?;
-        writeln!(out, "\n---\n")?;
         return Ok(());
     }
+    writeln!(out, "\n## Control Flow Graph\n")?;
+    writeln!(out, "> **Legend:** Solid -> NEXT, Dotted -.-> GOTO, Solid -> PERFORM, Dashed --|VARYING|--> PERFORM VARYING")?;
     writeln!(out, "```mermaid")?;
     writeln!(
         out,

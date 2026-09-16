@@ -83,6 +83,9 @@ fn hello_display_and_goback() {
     assert!(md.contains("DISPLAY"));
     assert!(md.contains("GOBACK"));
     assert!(!md.contains("No Procedure Division content found"));
+    assert!(!md.contains("## Working-Storage Variables"));
+    assert!(!md.contains("## Call Graph"));
+    assert!(!md.contains("No call graph data"));
 }
 
 #[test]
@@ -526,6 +529,10 @@ fn nested_program_is_separate_ir() {
         inner_paras.iter().any(|n| n == "INNER-PARA"),
         "{inner_paras:?}"
     );
+    let md = report::render(&ir, false, false).unwrap();
+    assert!(md.contains("## Nested Program: INNER"), "{md}");
+    assert!(md.contains("INNER-WS"), "{md}");
+    assert!(md.contains("INNER-PARA"), "{md}");
 }
 
 #[test]

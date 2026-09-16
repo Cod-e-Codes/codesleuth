@@ -89,4 +89,8 @@ fn empty_file_and_io_omit_headings() {
     assert!(!md.contains("## File Section"));
     assert!(!md.contains("_No File Section entries found._"));
     assert!(!md.contains("## Linkage Section"));
+    assert!(!md.contains("## Working-Storage Variables"));
+    assert!(!md.contains("## Call Graph"));
+    assert!(!md.contains("No call graph data"));
+    assert!(!md.contains("## Control Flow Graph"));
 }
