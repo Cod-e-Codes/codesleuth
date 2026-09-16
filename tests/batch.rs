@@ -32,7 +32,7 @@ fn scratch(label: &str) -> PathBuf {
 }
 
 #[test]
-fn report_path_flattens_like_go() {
+fn report_path_flattens_separators() {
     let out = Path::new("reports");
     let p = report_path(out, Path::new("test-cobol/foo/bar.cbl"));
     assert_eq!(p, PathBuf::from("reports/test-cobol_foo_bar.md"));

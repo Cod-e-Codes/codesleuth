@@ -11,6 +11,8 @@ pub struct IR {
     pub procedure_division: ProcedureDivision,
     pub call_graph: Vec<CallGraphEntry>,
     pub control_flow_graph: Vec<ControlFlowEdge>,
+    #[serde(default)]
+    pub nested_programs: Vec<IR>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +60,8 @@ pub struct DataItem {
 pub struct DataDivision {
     pub working_storage: Vec<DataItem>,
     pub file_section: Vec<DataItem>,
+    #[serde(default)]
+    pub linkage: Vec<DataItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

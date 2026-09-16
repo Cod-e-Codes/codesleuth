@@ -6,7 +6,7 @@ use crate::ir::{
     IdentificationDivision, InputOutputSection, Paragraph, ProcedureDivision, ProcedureSection,
     Statement, VariableUsage, IR,
 };
-use chrono::Utc;
+use crate::preprocess;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
@@ -40,29 +40,34 @@ static RE_AUTHOR: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^\s*AUTHOR\s*\.\s*
 static RE_DATE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)^\s*DATE-WRITTEN\s*\.\s*(.+)").unwrap());
 static RE_IDENT_DIV: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)^\s*IDENTIFICATION DIVISION\s*\.?\z").unwrap());
-static RE_END_DIV: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^\s*\w+ DIVISION\s*\.?\z").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)^\s*IDENTIFICATION DIVISION\s*\.?\s*$").unwrap());
+static RE_END_DIV: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*\w+ DIVISION\s*\.?\s*$").unwrap());
 static RE_WS_SECTION: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)^\s*WORKING-STORAGE SECTION\s*\.?$").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)^\s*WORKING-STORAGE SECTION\s*\.?\s*$").unwrap());
 static RE_FILE_SECTION: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)^\s*FILE SECTION\s*\.?$").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)^\s*FILE SECTION\s*\.?\s*$").unwrap());
+static RE_LINKAGE_SECTION: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*LINKAGE SECTION\s*\.?\s*$").unwrap());
+static RE_END_PROGRAM: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^\s*END\s+PROGRAM\s+(\S+)\s*\.?\s*$").unwrap());
 static RE_SECTION_END: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)^\s*(WORKING-STORAGE SECTION|FILE SECTION|LINKAGE SECTION|PROCEDURE DIVISION|[A-Z-]+ DIVISION)\b")
         .unwrap()
 });
 static RE_ANY_DIVISION: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)^\s*\w+ DIVISION\s*\.?$").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)^\s*\w+ DIVISION\s*\.?\s*$").unwrap());
 static RE_SECTION_HEADER: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^\s*([A-Z0-9-]+) SECTION\s*\.\s*$").unwrap());
 static RE_PARAGRAPH: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*([A-Z0-9-]+)\.\s*$").unwrap());
 static RE_OPEN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)OPEN\s+(INPUT|OUTPUT|I-O|EXTEND)\s+([A-Z0-9-]+)").unwrap());
 static RE_ENV_DIV: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)^\s*ENVIRONMENT DIVISION\s*\.?$").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)^\s*ENVIRONMENT DIVISION\s*\.?\s*$").unwrap());
 static RE_IO_SEC: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)^\s*INPUT-OUTPUT SECTION\s*\.?$").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)^\s*INPUT-OUTPUT SECTION\s*\.?\s*$").unwrap());
 static RE_FILE_CONTROL: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)^\s*FILE-CONTROL\s*\.?$").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)^\s*FILE-CONTROL\s*\.?\s*$").unwrap());
 static RE_ANY_DIV_PREFIX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)^\s*[A-Z][A-Z0-9-]* DIVISION\s*\.?").unwrap());
 
@@ -113,51 +118,15 @@ fn item_is_comp3(pic: Option<&str>, usage: Option<&str>) -> bool {
 }
 
 fn is_cobol_comment_or_blank(line: &str) -> bool {
-    let t = line.trim();
-    t.is_empty() || t.starts_with('*')
-}
-
-fn terminator_period_index(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if !in_double && c == b'\'' {
-            if in_single && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
-                i += 2;
-                continue;
-            }
-            in_single = !in_single;
-        } else if !in_single && c == b'"' {
-            if in_double && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
-                i += 2;
-                continue;
-            }
-            in_double = !in_double;
-        } else if !in_single
-            && !in_double
-            && c == b'.'
-            && s[i + 1..].chars().all(char::is_whitespace)
-        {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
+    cobol::is_cobol_comment_or_blank(line)
 }
 
 fn has_terminator_period(s: &str) -> bool {
-    terminator_period_index(s).is_some()
+    cobol::has_terminator_period(s)
 }
 
 fn strip_terminator(s: &str) -> &str {
-    if let Some(i) = terminator_period_index(s) {
-        s[..i].trim_end()
-    } else {
-        s.trim_end()
-    }
+    cobol::strip_terminator(s)
 }
 
 fn starts_data_entry(line: &str) -> bool {
@@ -289,6 +258,8 @@ fn extract_section_lines<'a>(source: &'a str, section: &str) -> Vec<&'a str> {
         &RE_WS_SECTION
     } else if section.eq_ignore_ascii_case("FILE SECTION") {
         &RE_FILE_SECTION
+    } else if section.eq_ignore_ascii_case("LINKAGE SECTION") {
+        &RE_LINKAGE_SECTION
     } else {
         return Vec::new();
     };
@@ -341,6 +312,17 @@ fn parse_data_items(section_lines: &[&str], section_name: Option<&str>) -> Vec<D
     let mut stack: Vec<(i32, DataItem)> = Vec::new();
     let mut result: Vec<DataItem> = Vec::new();
     for item in parsed {
+        if item.level == 77 {
+            while let Some((_, completed)) = stack.pop() {
+                if let Some((_, parent)) = stack.last_mut() {
+                    parent.children.push(completed);
+                } else {
+                    result.push(completed);
+                }
+            }
+            stack.push((item.level, item));
+            continue;
+        }
         while let Some((parent_level, _)) = stack.last() {
             if *parent_level < item.level {
                 break;
@@ -426,6 +408,35 @@ fn extract_variable_usage(
     rows
 }
 
+fn procedure_region_end(line: &str) -> bool {
+    RE_END_PROGRAM.is_match(line) || (RE_ANY_DIVISION.is_match(line) && !RE_PROC_DIV.is_match(line))
+}
+
+fn starts_exec_sql(line: &str) -> bool {
+    let toks = cobol::split_cobol_tokens(line);
+    toks.len() >= 2 && toks[0].eq_ignore_ascii_case("EXEC") && toks[1].eq_ignore_ascii_case("SQL")
+}
+
+fn ends_exec(line: &str) -> bool {
+    line.to_uppercase().contains("END-EXEC")
+}
+
+fn record_exec_sql(para: &mut Paragraph, raw: &str, line_no: usize) {
+    let upper = raw.to_uppercase();
+    let sql = if let (Some(a), Some(b)) = (upper.find("EXEC SQL"), upper.rfind("END-EXEC")) {
+        raw[a + 8..b].trim().to_string()
+    } else {
+        raw.trim().to_string()
+    };
+    para.statements.push(Statement {
+        r#type: "EXEC SQL".to_string(),
+        operands: vec![sql],
+        raw: raw.trim().to_string(),
+        line: Some(line_no),
+        source_location: None,
+    });
+}
+
 fn consume_procedure_header(line: &str, in_proc: &mut bool, skip_using: &mut bool) -> bool {
     if !*in_proc && RE_PROC_DIV.is_match(line) {
         *in_proc = true;
@@ -502,13 +513,17 @@ fn record_statement(
     call_graph: &mut Vec<CallGraphEntry>,
 ) {
     let trimmed = line.trim();
-    let mut parts = trimmed.split_whitespace();
+    let mut parts = cobol::split_cobol_tokens(trimmed);
     let stype = parts
-        .next()
-        .unwrap_or("")
+        .first()
+        .cloned()
+        .unwrap_or_default()
         .trim_end_matches('.')
         .to_uppercase();
-    let operands: Vec<String> = parts.map(|s| s.to_string()).collect();
+    if !parts.is_empty() {
+        parts.remove(0);
+    }
+    let operands: Vec<String> = parts;
     let stmt = Statement {
         r#type: stype.clone(),
         operands: operands.clone(),
@@ -586,7 +601,6 @@ fn parse_procedure_division_and_call_graph(
     Vec<ControlFlowEdge>,
     Vec<Paragraph>,
 ) {
-    let re_division = &RE_ANY_DIVISION;
     let re_section = &RE_SECTION_HEADER;
     let re_paragraph = &RE_PARAGRAPH;
     let skip_paragraphs = [
@@ -605,7 +619,7 @@ fn parse_procedure_division_and_call_graph(
             continue;
         }
         if in_proc {
-            if re_division.is_match(line) && !RE_PROC_DIV.is_match(line) {
+            if procedure_region_end(line) {
                 break;
             }
             if let Some(para_caps) = re_paragraph.captures(line) {
@@ -631,14 +645,51 @@ fn parse_procedure_division_and_call_graph(
     let mut default_section_paragraphs: Vec<Paragraph> = Vec::new();
     let mut control_flow_graph = Vec::new();
     let mut all_paragraphs_flat: Vec<Paragraph> = Vec::new();
+    let mut exec_sql: Option<(usize, String)> = None;
     for (i, line) in source.lines().enumerate() {
         let line = line.trim_end();
         if consume_procedure_header(line, &mut in_proc, &mut skip_using) {
             continue;
         }
         if in_proc {
-            if re_division.is_match(line) && !RE_PROC_DIV.is_match(line) {
+            if procedure_region_end(line) {
                 break;
+            }
+            if let Some((start, mut buf)) = exec_sql.take() {
+                buf.push(' ');
+                buf.push_str(line.trim());
+                if ends_exec(line) {
+                    ensure_paragraph(
+                        &mut current_paragraph,
+                        &mut current_paragraph_name,
+                        &current_section,
+                        program_name,
+                        start,
+                    );
+                    if let Some(ref mut para) = current_paragraph {
+                        record_exec_sql(para, &buf, start);
+                    }
+                } else {
+                    exec_sql = Some((start, buf));
+                }
+                continue;
+            }
+            if starts_exec_sql(line) {
+                if ends_exec(line) {
+                    ensure_paragraph(
+                        &mut current_paragraph,
+                        &mut current_paragraph_name,
+                        &current_section,
+                        program_name,
+                        i + 1,
+                    );
+                    if let Some(ref mut para) = current_paragraph {
+                        record_exec_sql(para, line, i + 1);
+                    }
+                } else {
+                    exec_sql = Some((i + 1, line.trim().to_string()));
+                }
+                continue;
             }
             if let Some(sec_caps) = re_section.captures(line) {
                 finish_paragraph(
@@ -948,12 +999,107 @@ pub fn parse_cobol_source(
     verbose: bool,
     debug: bool,
 ) -> Result<IR, Error> {
-    let path_str = path.as_ref().to_string_lossy().to_string();
+    let path = path.as_ref();
+    let prepared = preprocess::preprocess(source, path);
+    parse_program_tree(&prepared, path, verbose, debug)
+}
+
+fn parse_program_tree(source: &str, path: &Path, verbose: bool, debug: bool) -> Result<IR, Error> {
+    let (this_src, nested_srcs) = split_current_and_nested(source);
+    let mut ir = parse_one_program(&this_src, path, verbose, debug)?;
+    for nested in nested_srcs {
+        ir.nested_programs
+            .push(parse_program_tree(&nested, path, verbose, debug)?);
+    }
+    Ok(ir)
+}
+
+fn first_program_id(source: &str) -> String {
+    let (name, _, _, _) = parse_identification_division(source);
+    name
+}
+
+fn split_current_and_nested(source: &str) -> (String, Vec<String>) {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut ident_at = None;
+    for (i, line) in lines.iter().enumerate() {
+        if RE_IDENT_DIV.is_match(line) {
+            ident_at = Some(i);
+            break;
+        }
+    }
+    let Some(ident_at) = ident_at else {
+        return (source.to_string(), Vec::new());
+    };
+    let program_name = first_program_id(source);
+    let mut current: Vec<&str> = lines[..ident_at].to_vec();
+    let mut nested = Vec::new();
+    let mut seen_procedure = false;
+    let mut i = ident_at;
+    while i < lines.len() {
+        let line = lines[i];
+        if seen_procedure && RE_IDENT_DIV.is_match(line) {
+            let (src, consumed) = collect_nested_program(&lines[i..]);
+            nested.push(src);
+            i += consumed;
+            continue;
+        }
+        if let Some(caps) = RE_END_PROGRAM.captures(line) {
+            let ended = caps
+                .get(1)
+                .map(|m| m.as_str().trim_end_matches('.'))
+                .unwrap_or("");
+            if !program_name.is_empty() && ended.eq_ignore_ascii_case(&program_name) {
+                current.push(line);
+                i += 1;
+                break;
+            }
+        }
+        if RE_PROC_DIV.is_match(line) {
+            seen_procedure = true;
+        }
+        current.push(line);
+        i += 1;
+    }
+    while i < lines.len() {
+        if RE_IDENT_DIV.is_match(lines[i]) {
+            let (src, consumed) = collect_nested_program(&lines[i..]);
+            nested.push(src);
+            i += consumed;
+        } else {
+            i += 1;
+        }
+    }
+    (current.join("\n"), nested)
+}
+
+fn collect_nested_program(lines: &[&str]) -> (String, usize) {
+    let mut depth = 0usize;
+    let mut buf = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if RE_IDENT_DIV.is_match(line) {
+            depth += 1;
+        }
+        buf.push(*line);
+        if RE_END_PROGRAM.is_match(line) {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return (buf.join("\n"), i + 1);
+            }
+        }
+    }
+    (buf.join("\n"), lines.len())
+}
+
+fn parse_one_program(source: &str, path: &Path, verbose: bool, debug: bool) -> Result<IR, Error> {
+    let path_str = path.to_string_lossy().to_string();
     let (program_name, author, date_written, comments) = parse_identification_division(source);
     let ws_lines = extract_section_lines(source, "WORKING-STORAGE SECTION");
     let working_storage = parse_data_items(&ws_lines, Some("WORKING-STORAGE"));
     let file_lines = extract_section_lines(source, "FILE SECTION");
     let file_section = parse_data_items(&file_lines, Some("FILE SECTION"));
+    let linkage_lines = extract_section_lines(source, "LINKAGE SECTION");
+    let linkage = parse_data_items(&linkage_lines, Some("LINKAGE"));
     let (procedure_division, call_graph, control_flow_graph, paragraphs) =
         parse_procedure_division_and_call_graph(source, &program_name);
     let file_modes = parse_open_statements(source);
@@ -974,7 +1120,7 @@ pub fn parse_cobol_source(
             date_written: if !date_written.is_empty() {
                 date_written
             } else {
-                Utc::now().format("%Y-%m-%d").to_string()
+                "UNKNOWN".to_string()
             },
             comments,
         },
@@ -984,11 +1130,13 @@ pub fn parse_cobol_source(
         data_division: DataDivision {
             working_storage,
             file_section,
+            linkage,
         },
         paragraphs,
         procedure_division,
         call_graph,
         control_flow_graph,
+        nested_programs: Vec::new(),
     };
     if verbose || debug {
         match serde_json::to_string_pretty(&ir) {

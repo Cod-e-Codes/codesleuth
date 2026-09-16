@@ -4,7 +4,7 @@ Bug reports, feature requests, and pull requests are accepted.
 
 ## How to contribute
 
-- [Issues](https://github.com/Cod-e-Codes/codesleuth/issues): include reproduction steps for bugs.
+- [Issues](https://github.com/Cod-e-Codes/codesleuth/issues): include how to reproduce bugs.
 - Pull requests: branch from `main`, pass tests and lints, describe the change.
 
 ## Coding style
@@ -24,7 +24,7 @@ Open an issue or email Cody Marsengill at [cod.e.codes.dev@gmail.com](mailto:cod
 
 ## Setup
 
-1. Rust 1.70+: https://rustup.rs/
+1. Rust 1.85+: https://rustup.rs/
 2. Clone and build:
 
 ```sh

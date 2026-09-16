@@ -69,3 +69,24 @@ fn test_report() {
     assert!(md.contains("Procedure Division") || md.contains("No Procedure Division"));
     assert!(md.contains("COBOL Program Summary"));
 }
+
+#[test]
+fn empty_file_and_io_omit_headings() {
+    let ir_json = r#"{
+        "program_name": "TESTPROG",
+        "source_file": "test.cob",
+        "identification_division": {"author": "A", "date_written": "2024-01-01", "comments": []},
+        "environment_division": {"input_output_section": {"files": []}},
+        "data_division": {"working_storage": [], "file_section": [], "linkage": []},
+        "paragraphs": [],
+        "procedure_division": {"sections": []},
+        "call_graph": [],
+        "control_flow_graph": []
+    }"#;
+    let md = report::render_json(ir_json, false, false).unwrap();
+    assert!(!md.contains("## Environment Division - Input/Output Section"));
+    assert!(!md.contains("_No Input/Output files found._"));
+    assert!(!md.contains("## File Section"));
+    assert!(!md.contains("_No File Section entries found._"));
+    assert!(!md.contains("## Linkage Section"));
+}

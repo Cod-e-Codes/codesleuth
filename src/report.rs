@@ -114,17 +114,28 @@ fn print_working_storage<W: Write>(out: &mut W, ws_vars: &[DataItem]) -> io::Res
 }
 
 fn print_file_section<W: Write>(out: &mut W, file_sections: &[DataItem]) -> io::Result<()> {
-    writeln!(out, "\n## File Section\n")?;
     let named: Vec<&DataItem> = file_sections
         .iter()
         .filter(|item| !item.name.is_empty())
         .collect();
-    if !named.is_empty() {
-        let owned: Vec<DataItem> = named.into_iter().cloned().collect();
-        print_data_items(out, &owned, 0, false)?;
-    } else {
-        writeln!(out, "_No File Section entries found._")?;
+    if named.is_empty() {
+        return Ok(());
     }
+    writeln!(out, "\n## File Section\n")?;
+    let owned: Vec<DataItem> = named.into_iter().cloned().collect();
+    print_data_items(out, &owned, 0, false)?;
+    writeln!(out, "\n---\n")?;
+    Ok(())
+}
+
+fn print_linkage<W: Write>(out: &mut W, items: &[DataItem]) -> io::Result<()> {
+    let named: Vec<&DataItem> = items.iter().filter(|item| !item.name.is_empty()).collect();
+    if named.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "\n## Linkage Section\n")?;
+    let owned: Vec<DataItem> = named.into_iter().cloned().collect();
+    print_data_items(out, &owned, 0, false)?;
     writeln!(out, "\n---\n")?;
     Ok(())
 }
@@ -511,24 +522,46 @@ fn print_control_flow_graph<W: Write>(out: &mut W, cfg: &[ControlFlowEdge]) -> i
 
 fn print_io_files<W: Write>(out: &mut W, ir: &IR) -> io::Result<()> {
     let files = &ir.environment_division.input_output_section.files;
-    if !files.is_empty() {
-        writeln!(out, "\n## Environment Division - Input/Output Section\n")?;
-        writeln!(out, "| File Name | Type | Description | Record Structure |")?;
-        writeln!(out, "|-----------|------|-------------|------------------|")?;
-        for f in files {
-            writeln!(
-                out,
-                "| {} | {} | {} | {} |",
-                f.name,
-                f.r#type,
-                f.description,
-                f.record_name.as_deref().unwrap_or("")
-            )?;
-        }
-    } else {
-        writeln!(out, "\n_No Input/Output files found._")?;
+    if files.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "\n## Environment Division - Input/Output Section\n")?;
+    writeln!(out, "| File Name | Type | Description | Record Structure |")?;
+    writeln!(out, "|-----------|------|-------------|------------------|")?;
+    for f in files {
+        writeln!(
+            out,
+            "| {} | {} | {} | {} |",
+            f.name,
+            f.r#type,
+            f.description,
+            f.record_name.as_deref().unwrap_or("")
+        )?;
     }
     writeln!(out, "\n---\n")?;
+    Ok(())
+}
+
+fn print_nested_programs<W: Write>(out: &mut W, nested: &[IR]) -> io::Result<()> {
+    for program in nested {
+        writeln!(out, "\n## Nested Program: {}\n", program.program_name)?;
+        writeln!(
+            out,
+            "**Author:** {}",
+            program.identification_division.author
+        )?;
+        writeln!(
+            out,
+            "**Date Written:** {}",
+            program.identification_division.date_written
+        )?;
+        print_working_storage(out, &program.data_division.working_storage)?;
+        print_file_section(out, &program.data_division.file_section)?;
+        print_linkage(out, &program.data_division.linkage)?;
+        let mut paras = Vec::new();
+        print_procedure_division(out, program, &mut paras)?;
+        print_nested_programs(out, &program.nested_programs)?;
+    }
     Ok(())
 }
 
@@ -544,6 +577,8 @@ pub fn render(ir: &IR, verbose: bool, debug: bool) -> Result<String, Error> {
         .map_err(|e| Error::Report(e.to_string()))?;
     print_file_section(&mut output, &ir.data_division.file_section)
         .map_err(|e| Error::Report(e.to_string()))?;
+    print_linkage(&mut output, &ir.data_division.linkage)
+        .map_err(|e| Error::Report(e.to_string()))?;
     let mut all_paragraphs = Vec::new();
     print_procedure_division(&mut output, ir, &mut all_paragraphs)
         .map_err(|e| Error::Report(e.to_string()))?;
@@ -554,6 +589,8 @@ pub fn render(ir: &IR, verbose: bool, debug: bool) -> Result<String, Error> {
     print_unused_paragraphs(&mut output, &all_paragraphs, &ir.call_graph, &ir.paragraphs)
         .map_err(|e| Error::Report(e.to_string()))?;
     print_external_calls(&mut output, &ir.call_graph).map_err(|e| Error::Report(e.to_string()))?;
+    print_nested_programs(&mut output, &ir.nested_programs)
+        .map_err(|e| Error::Report(e.to_string()))?;
     String::from_utf8(output).map_err(|e| Error::Report(e.to_string()))
 }
 

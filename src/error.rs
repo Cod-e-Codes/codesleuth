@@ -9,8 +9,6 @@ pub enum Error {
         source: std::io::Error,
     },
     #[error("{0}")]
-    Parse(String),
-    #[error("{0}")]
     Report(String),
     #[error("panic while analyzing: {0}")]
     Panic(String),

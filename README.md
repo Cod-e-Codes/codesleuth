@@ -4,7 +4,7 @@ CLI that parses COBOL and writes Markdown summaries (program structure, unused p
 
 ## Requirements
 
-- Rust 1.70 or later: https://rustup.rs/
+- Rust 1.85 or later: https://rustup.rs/
 
 ## Install
 
@@ -29,7 +29,7 @@ Flags:
 - `--verbose` extra progress on stderr
 - `--debug` internal trace on stderr
 - `--workers N` concurrent workers (default: available parallelism)
-- `--benchmark` print wall-clock throughput after analysis (`FilesProcessed`, `TotalTimeSec`, `Throughput`)
+- `--benchmark` print wall-clock throughput after analysis (`Enabled`, `FilesProcessed`, `TotalTimeSec`, `Throughput`, `StartTime`, `EndTime`)
 - `--output PATH` Markdown file if the input is a file; directory of flattened `.md` names if the input is a directory
 
 Flattened report names strip `:`, replace `/` and `\` with `_`, and drop the source extension.
@@ -53,14 +53,13 @@ cargo run --bin gen_dummy -- --count 1000 --outdir dummy-cobol
 
 The parser is not a complete COBOL implementation.
 
-- COPY is recorded as an unresolved copybook name. REPLACING and REPLACE are not applied, and copybooks are not expanded.
-- LINKAGE SECTION is not parsed.
-- Quoted literals are split on spaces, so operands in the report may not match the source tokens.
-- Missing AUTHOR is reported as UNKNOWN. Missing DATE-WRITTEN is filled with the UTC date of the run, so Markdown is not bit-stable across days.
-- File Section and Input/Output headings are always printed; they say no entries when the source has none.
-- Nested programs (`END PROGRAM`, inner IDENTIFICATION DIVISION) are not modeled. One PROGRAM-ID and one procedure walk per file.
-- `EXEC SQL` ... `END-EXEC` is treated as COBOL statements, not SQL.
-- Column-7 continuation (hyphen vs space, Area B) is not implemented.
+- COPY inserts library text when a matching `.cpy` / `.cbl` / `.cob` member is found next to the source or in `COPYBOOK`, `COPYLIB`, or `copybooks` directories walking up from the file. REPLACING matches whole text words (so `FOO` does not change `FOOBAR`) and dummy operands (`:TAG:`, `(TAG)`). `LEADING` / `TRAILING` match a prefix or suffix of one text word. REPLACE runs after COPY. If the member is not found, COPY remains a copybook data item.
+- LINKAGE SECTION is parsed as names and descriptions. IBM: that data exists elsewhere; this tool does not reserve storage.
+- Missing AUTHOR and DATE-WRITTEN are UNKNOWN. IBM: those paragraphs are optional comment-entries.
+- File Section, Linkage, and Input/Output headings are omitted when the source has no entries.
+- Nested programs (`END PROGRAM`, inner IDENTIFICATION) are stored in `nested_programs` (same IR shape).
+- In PROCEDURE DIVISION, `EXEC SQL` ... `END-EXEC` is one statement (IBM: those delimiters are complete on one line). In DATA DIVISION, `EXEC SQL INCLUDE` is expanded like COPY when the member is found; other `EXEC SQL` text (DECLARE TABLE, DECLARE CURSOR, INCLUDE when the member is missing) is skipped and is not a data item. Not a Db2 coprocessor: no DBRM, no generated SQLCA.
+- Column-7 hyphen joins without a space. For an unclosed alphanumeric or national literal, spaces through column 72 of the continued line are kept, and the continuation quote is not part of the value ([IBM 6.5 continuation lines](https://www.ibm.com/docs/en/cobol-zos/6.5.0?topic=b-continuation-lines), Language Reference SC27-8713-04).
 - `--workers` isolates unwinding panics per file (`catch_unwind`). The process still exits if Rust is built with `panic = "abort"`, on a double panic, or on some stack overflows.
 
 IR JSON shape: [docs/ir_schema.json](docs/ir_schema.json).

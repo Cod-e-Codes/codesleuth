@@ -118,6 +118,90 @@ pub fn is_valid_identifier(name: &str) -> bool {
     RE_IDENT.is_match(&name)
 }
 
+pub fn is_cobol_comment_or_blank(line: &str) -> bool {
+    let t = line.trim();
+    t.is_empty() || t.starts_with('*')
+}
+
+pub fn terminator_period_index(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if !in_double && c == b'\'' {
+            if in_single && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                i += 2;
+                continue;
+            }
+            in_single = !in_single;
+        } else if !in_single && c == b'"' {
+            if in_double && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+                i += 2;
+                continue;
+            }
+            in_double = !in_double;
+        } else if !in_single
+            && !in_double
+            && c == b'.'
+            && s[i + 1..].chars().all(char::is_whitespace)
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+pub fn has_terminator_period(s: &str) -> bool {
+    terminator_period_index(s).is_some()
+}
+
+pub fn strip_terminator(s: &str) -> &str {
+    if let Some(i) = terminator_period_index(s) {
+        s[..i].trim_end()
+    } else {
+        s.trim_end()
+    }
+}
+
+pub fn split_cobol_tokens(s: &str) -> Vec<String> {
+    let s = strip_terminator(s).trim();
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut chars = s.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+    while let Some(c) = chars.next() {
+        if !in_double && c == '\'' {
+            cur.push(c);
+            if in_single && chars.peek() == Some(&'\'') {
+                cur.push(chars.next().unwrap());
+            } else {
+                in_single = !in_single;
+            }
+        } else if !in_single && c == '"' {
+            cur.push(c);
+            if in_double && chars.peek() == Some(&'"') {
+                cur.push(chars.next().unwrap());
+            } else {
+                in_double = !in_double;
+            }
+        } else if !in_single && !in_double && c.is_whitespace() {
+            if !cur.is_empty() {
+                tokens.push(std::mem::take(&mut cur));
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
 pub fn format_value(raw: Option<&str>) -> String {
     let Some(s) = raw else {
         return String::new();

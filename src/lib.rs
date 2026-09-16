@@ -5,6 +5,7 @@ pub mod discover;
 pub mod error;
 pub mod ir;
 pub mod parser;
+pub mod preprocess;
 pub mod report;
 
 pub use error::Error;

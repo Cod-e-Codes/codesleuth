@@ -46,6 +46,20 @@
         "section": "string or null",
         "children": []
       }
+    ],
+    "linkage": [
+      {
+        "name": "string",
+        "level": "integer",
+        "picture": "string or null",
+        "type": "string or null",
+        "value": "string or null",
+        "occurs": "integer or null",
+        "redefines": "string or null",
+        "comp3": "boolean",
+        "section": "string or null",
+        "children": []
+      }
     ]
   },
   "paragraphs": [
@@ -97,6 +111,20 @@
       "from": "string",
       "to": "string",
       "type": "NEXT|PERFORM|GOTO|PERFORM VARYING"
+    }
+  ],
+  "nested_programs": [
+    {
+      "program_name": "string",
+      "source_file": "string",
+      "identification_division": {},
+      "environment_division": {},
+      "data_division": {},
+      "paragraphs": [],
+      "procedure_division": {},
+      "call_graph": [],
+      "control_flow_graph": [],
+      "nested_programs": []
     }
   ]
 }
