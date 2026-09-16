@@ -11,8 +11,9 @@
       "files": [
         {
           "name": "string",
-          "type": "input|output|i-o|extend",
-          "description": "string"
+          "type": "string",
+          "description": "string",
+          "record_name": "string or null"
         }
       ]
     }
@@ -21,41 +22,53 @@
     "working_storage": [
       {
         "name": "string",
-        "type": "string",
         "level": "integer",
-        "picture": "string",
-        "value": "string|number|null",
+        "picture": "string or null",
+        "type": "string or null",
+        "value": "string or null",
+        "occurs": "integer or null",
+        "redefines": "string or null",
+        "comp3": "boolean",
+        "section": "string or null",
         "children": []
       }
     ],
     "file_section": [
       {
         "name": "string",
-        "fields": [
-          {
-            "name": "string",
-            "type": "string",
-            "picture": "string",
-            "children": []
-          }
-        ]
+        "level": "integer",
+        "picture": "string or null",
+        "type": "string or null",
+        "value": "string or null",
+        "occurs": "integer or null",
+        "redefines": "string or null",
+        "comp3": "boolean",
+        "section": "string or null",
+        "children": []
       }
     ]
   },
   "paragraphs": [
     {
       "name": "string",
-      "section": "string",
+      "section": "string or null",
       "kind": "paragraph",
-      "line": 123,
-      "source_location": "myfile.cbl:123",
+      "line": "integer or null",
+      "source_location": "string or null",
       "statements": [
         {
-          "type": "PERFORM|CALL|MOVE|IF|DISPLAY|...",
+          "type": "string",
           "operands": ["string"],
           "raw": "string",
-          "line": 123,
-          "source_location": "myfile.cbl:123"
+          "line": "integer or null",
+          "source_location": "string or null"
+        }
+      ],
+      "variable_usage": [
+        {
+          "name": "string",
+          "read": "boolean",
+          "written": "boolean"
         }
       ]
     }
@@ -64,7 +77,7 @@
     "sections": [
       {
         "name": "string",
-        "paragraphs": ["string"]
+        "paragraphs": []
       }
     ]
   },
@@ -74,9 +87,16 @@
       "to": "string",
       "type": "CALL|PERFORM|GOTO|PERFORM VARYING",
       "kind": "edge",
-      "line": 123,
-      "section": "string",
-      "source_location": "myfile.cbl:123"
+      "line": "integer or null",
+      "section": "string or null",
+      "source_location": "string or null"
+    }
+  ],
+  "control_flow_graph": [
+    {
+      "from": "string",
+      "to": "string",
+      "type": "NEXT|PERFORM|GOTO|PERFORM VARYING"
     }
   ]
-} 
+}

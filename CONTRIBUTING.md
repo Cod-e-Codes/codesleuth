@@ -9,8 +9,8 @@ Bug reports, feature requests, and pull requests are accepted.
 
 ## Coding style
 
-- Rust: [Rust Style Guide](https://doc.rust-lang.org/1.0.0/style/)
-- Go: [Effective Go](https://go.dev/doc/effective_go)
+- [Rust Style Guide](https://doc.rust-lang.org/stable/style-guide/)
+- `cargo fmt` and `cargo clippy --all-targets -- -D warnings`
 
 Use descriptive names. Comment non-obvious logic.
 
@@ -25,37 +25,37 @@ Open an issue or email Cody Marsengill at [cod.e.codes.dev@gmail.com](mailto:cod
 ## Setup
 
 1. Rust 1.70+: https://rustup.rs/
-2. Go 1.23+: https://go.dev/dl/
-3. Clone and build:
+2. Clone and build:
 
 ```sh
 git clone https://github.com/Cod-e-Codes/codesleuth.git
 cd codesleuth
-go mod tidy
-cargo build --release --manifest-path codesleuth/Cargo.toml
-cd cmd && go build -o codesleuth && cd ..
+cargo build --release
 ```
 
 ## Tests
 
 ```sh
-go test ./...
-cd codesleuth && cargo test
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-CLI:
+Product path on local public COBOL (not dummy files):
 
 ```sh
-./cmd/codesleuth analyze --workers=4 --benchmark dummy-cobol
+./target/release/codesleuth analyze test-cobol --workers 4 --output reports-verify
+./target/release/codesleuth analyze test-cobol --workers 4 --benchmark
 ```
 
-Dummy files:
+`test-cobol/` is gitignored. The COBOL Programming Course labs are CC-BY-4.0; IBM Z Open Editor samples in that tree keep their upstream licenses.
+
+Load-test files only:
 
 ```sh
-go run scripts/generate_dummy_cobol.go --count=1000 --outdir=dummy-cobol
+cargo run --bin gen_dummy -- --count=1000 --outdir=dummy-cobol
 ```
 
 ## Before committing
 
-- Rust: `cargo fmt` and `cargo clippy` in `codesleuth/`
-- Go: `gofmt` and `go vet`
+- `cargo fmt` and `cargo clippy --all-targets -- -D warnings`

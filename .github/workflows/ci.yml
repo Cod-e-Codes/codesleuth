@@ -7,41 +7,38 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
-      - name: Build Rust backend
-        run: cargo build --release --manifest-path codesleuth/Cargo.toml
-      - name: Test Rust
-        run: cargo test --manifest-path codesleuth/Cargo.toml
+          components: clippy, rustfmt
+      - name: Format
+        run: cargo fmt --check
+      - name: Test
+        run: cargo test
       - name: Clippy
-        run: cargo clippy --manifest-path codesleuth/Cargo.toml --all-targets -- -D warnings
-      - name: Set up Go
-        uses: actions/setup-go@v5
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Release build
+        run: cargo build --release
+
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Release build
+        run: cargo build --release
+      - name: Clone COBOL Programming Course
+        uses: actions/checkout@v4
         with:
-          go-version: '1.24'
-      - name: Test Go
-        run: go test ./...
-      - name: Vet Go
-        run: go vet ./...
-      - name: Build Go CLI
-        run: cd cmd && go build -o codesleuth
-      - name: Smoke analyze
-        run: |
-          mkdir -p smoke
-          cat > smoke/hello.cob << 'EOF'
-                 IDENTIFICATION DIVISION.
-                 PROGRAM-ID. HELLO.
-                 DATA DIVISION.
-                 WORKING-STORAGE SECTION.
-                 77  WHO PIC X(15).
-                 PROCEDURE DIVISION.
-                     DISPLAY 'HELLO WORLD!'.
-                     GOBACK.
-          EOF
-          ./cmd/codesleuth --rust-backend ./codesleuth/target/release/codesleuth analyze smoke
+          repository: openmainframeproject/cobol-programming-course
+          ref: 1f037d24326124f4f2c5cd2d31e5220ceb549580
+          path: corpus
+      - name: Analyze labs
+        run: ./target/release/codesleuth analyze corpus --workers 4 --output reports-ci
+      - name: Benchmark labs
+        run: ./target/release/codesleuth analyze corpus --workers 4 --benchmark --output reports-ci-bench
